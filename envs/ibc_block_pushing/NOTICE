@@ -1,0 +1,15 @@
+This directory contains code vendored from google-research/ibc
+(https://github.com/google-research/ibc), the reference implementation
+accompanying "Implicit Behavioral Cloning" (Florence et al., CoRL 2021).
+
+    Copyright 2024 The Reach ML Authors.
+
+The vendored code is licensed under the Apache License, Version 2.0; a copy
+is provided in the LICENSE file in this directory. Modifications made here:
+
+  * Removed the tf_agents-dependent oracle and metric modules, and the
+    multimodal / discontinuous task variants, none of which this project uses.
+  * Replaced the `gin` configuration dependency with no-op stubs (see
+    __init__.py), since parameters are set directly in Python.
+  * Patched `utils/utils_pybullet.load_urdf` to resolve asset paths against
+    this package's `assets/` directory instead of internal Google paths.

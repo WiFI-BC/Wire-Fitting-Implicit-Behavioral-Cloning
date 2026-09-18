@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+title: "WiFI-BC: Wire-Fitting Implicit Behavioral Cloning"
+message: "If you use this software, please cite the accompanying paper."
+type: software
+authors:
+  - name: "Anonymous (paper under double-blind review)"
+license: MIT
+version: 1.0.0
+abstract: >-
+  Reference implementation of Wire-Fitting Implicit Behavioral Cloning
+  (WiFI-BC), an implicit imitation-learning policy that scores a small learned
+  set of candidate actions rather than optimizing over the full action space,
+  together with the IBC, Diffusion Policy, Consistency Policy and explicit BC
+  baselines it is compared against.
+preferred-citation:
+  type: conference-paper
+  title: "WiFI-BC: Wire-Fitting Implicit Behavioral Cloning"
+  authors:
+    - name: "Anonymous (paper under double-blind review)"
+  year: 2026
+  collection-title: "IEEE International Conference on Robotics and Automation (ICRA)"

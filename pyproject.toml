@@ -1,0 +1,64 @@
+[project]
+name = "wifi-bc"
+version = "1.0.0"
+description = "Wire-Fitting Implicit Behavioral Cloning — a fast implicit policy that scores a learned set of candidate actions instead of optimizing over the whole action space."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = { file = "LICENSE" }
+dependencies = [
+    "numpy>=2.4.1",
+    "torch>=2.9.1",
+    "torchvision>=0.24",      # ResNet-18 image encoder (pixel observations)
+    "minari[all]>=0.5.3",     # D4RL datasets: Adroit Pen, Franka Kitchen
+    "gymnasium-robotics>=1.4.2",
+    "matplotlib>=3.10.8",     # Point Maze multimodality plots
+    "pillow>=10.0",           # Particle episode GIFs
+    "wandb>=0.18.0",          # training metrics; set WANDB_MODE=offline to skip
+    "tensorflow>=2.20.0",     # reads the IBC TFRecord datasets (particle, pushing)
+]
+
+# Simulated Pushing (states and pixels). The PyBullet simulator is kept OUT of
+# the main dependency list because pybullet publishes no cp312 wheels and
+# building it from source needs a toolchain none of the other tasks touch.
+# Install with `uv sync --extra pushing`.
+[project.optional-dependencies]
+pushing = [
+    "gym==0.26.2",
+    "pybullet==3.1.6",
+    "scipy>=1.11",
+    "six>=1.16",
+]
+
+# LIBERO-Goal. Only LIBERO's pinned runtime dependencies are listed; LIBERO
+# itself is added by `scripts/setup_libero.sh`, which clones it into
+# third_party/ and registers that clone as an editable path source. It is not
+# declared here because uv resolves the sources of every extra, so a path that
+# does not exist yet would break a plain `uv sync` for everyone who never uses
+# LIBERO. The robosuite/gym/bddl/easydict pins match what LIBERO 0.1.0 requires.
+libero = [
+    "robosuite==1.4.0",
+    "bddl==1.0.1",
+    "easydict==1.9",
+    "gym==0.26.2",
+    "numba>=0.59",
+    "opencv-python-headless>=4.8",
+    "termcolor>=2.0",
+    "future>=0.18",
+    "h5py>=3.10",
+    "pyyaml>=6.0",
+    "sentence-transformers>=2.2",  # language-goal embeddings (scripts/precompute_libero_goal_embs.py)
+    "transformers>=4.30",
+]
+
+[tool.uv]
+# TensorFlow publishes cp312/cp313 wheels only, so let uv fetch its own managed
+# 3.12 rather than reuse whatever interpreter happens to be on PATH.
+python-preference = "managed"
+# robosuite hard-requires `opencv-python`, which links libGL and fails to import
+# on a headless machine. Override it out with an always-false marker so `cv2`
+# comes from `opencv-python-headless` (in the libero extra) instead. Keeps
+# robosuite's `import cv2` working without libGL.
+override-dependencies = ["opencv-python; sys_platform == 'never'"]
+
+[tool.setuptools.packages.find]
+include = ["wifi_bc*", "baselines*", "envs*", "training*"]

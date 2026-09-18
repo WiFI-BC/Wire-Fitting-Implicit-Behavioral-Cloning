@@ -1,0 +1,24 @@
+# Environment
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ruff_cache/
+
+# Data, checkpoints and run outputs — all reproducible, none belong in git
+datasets/
+checkpoints/
+third_party/LIBERO/
+.libero/
+wandb/
+plots/
+*.pt
+*.npz
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Agent instructions (local only)
+AGENTS.md
