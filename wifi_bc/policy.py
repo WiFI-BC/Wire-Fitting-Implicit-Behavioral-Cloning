@@ -37,7 +37,7 @@ and actions are returned in the environment's own units.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 import torch
@@ -69,6 +69,8 @@ class WiFIBC:
         action_space: str = "model",
         frame_stack: int = 1,
         input_dim: int | None = None,
+        obs_indices: "list[int] | None" = None,
+        pixel: bool = False,
         inference_mode: str = "argmax",
         dfo_iterations: int = 3,
         dfo_std: float = 0.1,
@@ -130,6 +132,17 @@ class WiFIBC:
         # Width of the (frame-stacked) policy input. Lets `act` accept either a
         # single raw observation or one the caller stacked themselves.
         self._input_dim = input_dim
+        # Columns of the raw observation this policy was trained on. Franka
+        # Kitchen's `kitchen_qpos_only` keeps 30 of the environment's 59 dims,
+        # so `act` has to make the same selection before normalizing — the
+        # normalizer and the network are both built for the trimmed width.
+        self._obs_indices = (
+            None if obs_indices is None else np.asarray(obs_indices, dtype=np.int64)
+        )
+        # Image policies skip frame stacking and observation normalization: the
+        # dataset already stacks camera frames channel-wise and the conv encoder
+        # does its own uint8 -> [0,1] scaling and resize.
+        self.pixel = bool(pixel)
         self._frames: list[np.ndarray] = []
 
     # ── construction ────────────────────────────────────────────────────────
@@ -171,6 +184,16 @@ class WiFIBC:
             if norm_stats_path.exists()
             else {}
         )
+
+        # A pixel checkpoint records its channel count; a flat one does not.
+        is_pixel = "in_channels" in norm_stats or not isinstance(
+            env_config.get("state_dim"), int
+        )
+        if is_pixel:
+            return cls._from_pixel_checkpoint(
+                checkpoint_dir, env_config, norm_stats, device,
+                inference_mode, use_ema, overrides,
+            )
 
         cp_path, q_path = cls._weight_paths(checkpoint_dir, use_ema)
 
@@ -227,6 +250,83 @@ class WiFIBC:
             action_space="env" if float(action_bounds[0]) == 0.0 else "model",
             frame_stack=frame_stack,
             input_dim=state_dim,
+            obs_indices=norm_stats.get("obs_indices"),
+            inference_mode=inference_mode,
+            dfo_iterations=int(et.get("inference_dfo_iterations", 3) or 3),
+            dfo_std=float(et.get("inference_dfo_iteration_std", 0.1)),
+            dfo_std_decay=float(et.get("inference_dfo_iteration_std_decay", 0.5)),
+            dfo_num_uniform=int(et.get("inference_dfo_num_uniform", 0)),
+            langevin_iterations=int(et.get("inference_langevin_iterations", 25) or 25),
+            langevin_config=cls._langevin_config(env_config),
+            device=device,
+        )
+        params.update(overrides)
+        return cls(cp_gen, q_est, **params)
+
+    @classmethod
+    def _from_pixel_checkpoint(cls, checkpoint_dir, env_config, norm_stats, device,
+                               inference_mode, use_ema, overrides) -> "WiFIBC":
+        """Rebuild an image-observation policy (pushing_pixels, libero_goal_pixels).
+
+        The encoder architecture comes from `norm_stats`, which records what
+        training actually built — the config alone is not enough, because frame
+        stacking and the camera count both change the channel width.
+        `encoder_pretrained` is forced off: the weights come from the
+        checkpoint, and a machine with no network must not try to fetch
+        ImageNet.
+        """
+        from wifi_bc.models import PixelControlPointGenerator, PixelQEstimator
+
+        em = env_config.get("model", {})
+        et = env_config.get("training", {})
+        ns = norm_stats
+        action_chunk = int(ns.get("action_chunk", 1) or 1)
+        action_dim = int(env_config["action_dim"]) * action_chunk
+        action_bounds = tuple(env_config.get("action_bounds", [-1.0, 1.0]))
+        enc = dict(
+            in_channels=int(ns.get("in_channels", env_config["state_dim"][0])),
+            encoder_target_height=int(env_config.get("encoder_target_height", 180)),
+            encoder_target_width=int(env_config.get("encoder_target_width", 240)),
+            encoder_feature_dim=int(ns.get("encoder_feature_dim", 256)),
+            cond_dim=int(ns.get("cond_dim", 0)),
+            encoder_kind=str(ns.get("encoder_kind", em.get("encoder_kind", "conv_maxpool"))),
+            encoder_pretrained=False,
+            encoder_num_kp=int(ns.get("encoder_num_kp", em.get("encoder_num_kp", 64))),
+            encoder_norm_kind=str(ns.get("encoder_norm_kind", em.get("encoder_norm_kind", "bn"))),
+            encoder_per_camera=bool(ns.get("encoder_per_camera", em.get("encoder_per_camera", False))),
+            cond_fusion=str(ns.get("cond_fusion", em.get("cond_fusion", "concat"))),
+            goal_dim=int(ns.get("goal_emb_dim", 0)),
+        )
+        cp_width = int(em.get("cp_width", em.get("num_neurons", 256)))
+        cp_depth = int(em.get("cp_depth", em.get("num_hidden_layers", 2)))
+        cp_gen = PixelControlPointGenerator(
+            output_dim=action_dim,
+            control_points=int(em["control_points"]),
+            hidden_dims=[cp_width] * cp_depth,
+            action_bounds=action_bounds,
+            network_kind=em.get("cp_network_kind", "mlp"),
+            width=cp_width, depth=cp_depth,
+            use_spectral_norm=bool(em.get("cp_use_spectral_norm", False)),
+            output_activation=em.get("cp_output_activation", "tanh"),
+            **enc,
+        )
+        q_est = PixelQEstimator(
+            action_dim=action_dim,
+            value_width=int(ns.get("value_width", em.get("value_width", 1024))),
+            value_num_blocks=int(ns.get("value_num_blocks", em.get("value_num_blocks", 1))),
+            **enc,
+        )
+        cp_path, q_path = cls._weight_paths(Path(checkpoint_dir), use_ema)
+        cp_gen.load_state_dict(torch.load(cp_path, map_location=device, weights_only=True))
+        q_est.load_state_dict(torch.load(q_path, map_location=device, weights_only=True))
+
+        params = dict(
+            action_bounds=action_bounds,
+            obs_normalizer=None,
+            act_min=ns.get("act_min"), act_max=ns.get("act_max"),
+            action_space="model",
+            frame_stack=1,          # frames are already stacked channel-wise
+            pixel=True,
             inference_mode=inference_mode,
             dfo_iterations=int(et.get("inference_dfo_iterations", 3) or 3),
             dfo_std=float(et.get("inference_dfo_iteration_std", 0.1)),
@@ -297,17 +397,26 @@ class WiFIBC:
         self._frames = []
 
     @torch.no_grad()
-    def act(self, observation: np.ndarray | Sequence[float]) -> np.ndarray:
+    def act(self, observation, cond: np.ndarray | None = None) -> np.ndarray:
         """One action for one observation, in the environment's own units.
 
         Pass the raw per-step observation: frame stacking is handled here, so
         `reset()` between episodes is all the bookkeeping required. An
         observation already the width of the stacked input is used as-is.
         """
-        obs = self._stack(np.asarray(observation, dtype=np.float32).reshape(-1))
-        obs_t = torch.from_numpy(obs).unsqueeze(0).to(self.device)
-        if self.obs_normalizer is not None:
-            obs_t = self.obs_normalizer.normalize(obs_t)
+        if self.pixel:
+            obs_t = self._image_to_tensor(observation)
+            if cond is not None:
+                cond_t = torch.as_tensor(
+                    np.asarray(cond, dtype=np.float32).reshape(1, -1)
+                ).to(self.device)
+                self.cp_gen._cond = cond_t
+                self.q_estimator._cond = cond_t
+        else:
+            obs = self._stack(self._select(observation))
+            obs_t = torch.from_numpy(obs).unsqueeze(0).to(self.device)
+            if self.obs_normalizer is not None:
+                obs_t = self.obs_normalizer.normalize(obs_t)
 
         candidates = self.cp_gen(obs_t)  # (1, N, A)
         if self.inference_mode == "dfo":
@@ -319,6 +428,31 @@ class WiFIBC:
 
         action = np.clip(action, self.action_bounds[0], self.action_bounds[1])
         return self._denormalize_action(action)
+
+    def _image_to_tensor(self, image) -> torch.Tensor:
+        """(H, W, C) or (C, H, W) uint8 image -> (1, C, H, W) tensor.
+
+        Channels-last is what the simulations hand around, so it is detected by
+        the smaller trailing axis rather than requiring the caller to transpose.
+        """
+        arr = np.asarray(image)
+        if arr.ndim == 3 and arr.shape[-1] < arr.shape[0]:
+            arr = np.transpose(arr, (2, 0, 1))
+        t = torch.from_numpy(np.ascontiguousarray(arr)).float()
+        return t.unsqueeze(0).to(self.device) if t.ndim == 3 else t.to(self.device)
+
+    def _select(self, observation) -> np.ndarray:
+        """Raw environment observation -> the vector this policy was trained on.
+
+        Accepts the Dict observation FrankaKitchen returns, and applies the
+        stored column selection when there is one.
+        """
+        if isinstance(observation, dict):
+            observation = observation.get("observation", observation)
+        obs = np.asarray(observation, dtype=np.float32).reshape(-1)
+        if self._obs_indices is not None and obs.size != self._obs_indices.size:
+            obs = obs[self._obs_indices]
+        return obs
 
     def _stack(self, obs: np.ndarray) -> np.ndarray:
         if self.frame_stack <= 1:
@@ -333,7 +467,15 @@ class WiFIBC:
         return np.concatenate(self._frames)
 
     def _q(self, obs_t: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        """Critic scores for a candidate cloud, shape (1, N)."""
+        """Critic scores for a candidate cloud, shape (1, N).
+
+        Pixels use late fusion: encode the image once and broadcast those
+        features over the candidates, so a refinement loop costs one conv pass
+        rather than one per iteration.
+        """
+        if self.pixel:
+            feats = self.q_estimator.encode(obs_t)
+            return self.q_estimator.score(feats, self._normalize_action(actions)).squeeze(-1)
         obs_expanded = obs_t.unsqueeze(1).expand(-1, actions.shape[1], -1)
         return self.q_estimator(obs_expanded, self._normalize_action(actions)).squeeze(-1)
 

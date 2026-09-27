@@ -49,6 +49,8 @@ torch.load = _trusted_torch_load
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from wifi_bc.config import resolve_env_config  # noqa: E402
+
 
 def effective_langevin_config(env_config: dict) -> dict:
     """Merge env_training langevin_* overrides onto env_model.langevin_config defaults.
@@ -235,6 +237,48 @@ def _build_diffusion_generator(weights_path, env_config, norm_stats, action_dim,
     return gen.to(device).eval()
 
 
+def detect_method(checkpoint_dir: str) -> str:
+    """Which method wrote this checkpoint, from the weight files present.
+
+    Evaluation has to know this BEFORE it reads the environment config, because
+    each method keeps its own hyperparameters under `methods.<name>` and is
+    rebuilt from them. Reading the config for the wrong method silently
+    reconstructs the wrong architecture — a diffusion policy trained as a
+    1024-wide dense_resnet came back as a 256-wide MLP and failed to load.
+
+    Raises when more than one method's weights sit in the same directory, which
+    otherwise resolves to whichever check happened to run first.
+    """
+    import os as _os
+
+    def has(*names):
+        return [n for n in names if _os.path.exists(_os.path.join(checkpoint_dir, n))]
+
+    found = {}
+    if _os.path.exists(_os.path.join(checkpoint_dir, "cp_meta.json")) and has(
+        "cp_student.pt", "cp_teacher.pt", "cp_teacher_ema.pt"
+    ):
+        found["consistency_policy"] = has("cp_student.pt", "cp_teacher.pt", "cp_teacher_ema.pt")
+    if has("bc_policy.pt", "bc_policy_ema.pt"):
+        found["bc_mse"] = has("bc_policy.pt", "bc_policy_ema.pt")
+    if has("denoiser.pt", "denoiser_ema.pt"):
+        found["diffusion_policy"] = has("denoiser.pt", "denoiser_ema.pt")
+    if has("control_point_generator.pt", "control_point_generator_ema.pt"):
+        found["wifi_bc"] = has("control_point_generator.pt", "control_point_generator_ema.pt")
+    elif has("q_estimator.pt"):
+        found["ibc"] = has("q_estimator.pt")
+
+    if len(found) > 1:
+        detail = "; ".join(f"{m}: {', '.join(f)}" for m, f in sorted(found.items()))
+        raise RuntimeError(
+            f"{checkpoint_dir} holds weights from more than one method ({detail}). "
+            "Evaluation infers the method from these files, so it cannot choose. "
+            "Train each method into its own directory — the default is "
+            "checkpoints/<method>/<env> — or point --checkpoint at one of them."
+        )
+    return next(iter(found), "wifi_bc")
+
+
 def evaluate(checkpoint_dir: str, config: dict) -> dict:
     """Load the policy in *checkpoint_dir* and measure its task performance.
 
@@ -247,7 +291,10 @@ def evaluate(checkpoint_dir: str, config: dict) -> dict:
     from wifi_bc.sampling import sample_langevin
 
     active_env = config.get("active_env", "particle")
-    env_config = config["environments"][active_env]
+    # Resolve the environment block FOR THE METHOD THIS CHECKPOINT IS, so the
+    # architecture and inference settings match what training used.
+    method = detect_method(checkpoint_dir)
+    env_config = resolve_env_config(config, active_env, method)
     sim_config = config.get("simulation", {})
 
     # Pick the right simulation class. `pushing` uses the vendored IBC env
@@ -269,6 +316,9 @@ def evaluate(checkpoint_dir: str, config: dict) -> dict:
     elif active_env == "libero_goal_pixels":
         from envs.libero_goal_pixels_simulation import LiberoGoalPixelsSimulation
         SimulationCls = LiberoGoalPixelsSimulation
+    elif active_env == "reach":
+        from envs.reach_simulation import ReachSimulation
+        SimulationCls = ReachSimulation
     elif active_env == "point_maze_pillar":
         from envs.point_maze_pillar_simulation import PointMazePillarSimulation
         SimulationCls = PointMazePillarSimulation
@@ -470,7 +520,7 @@ def evaluate(checkpoint_dir: str, config: dict) -> dict:
             "checkpoints are missing; evaluating raw weights."
         )
     elif use_ema:
-        print(f"Evaluating WiFI-BC EMA weights (decay={eval_ema_decay}).")
+        print(f"Evaluating {method} EMA weights (decay={eval_ema_decay}).")
 
     # Presence of norm_stats.pt = ibc_with_cps (actions normalized to [0,1]
     # before the Q estimator sees them).
@@ -1180,7 +1230,19 @@ def evaluate(checkpoint_dir: str, config: dict) -> dict:
         # constants in the env itself, not config-driven).
         pass
     else:
+        # Particle and anything else dimension-parameterised.
         sim_kwargs["n_dim"] = n_dim
+    # Drop kwargs this simulation does not declare. Every branch above adds the
+    # knobs its own env needs, but a simulation added later — yours — should not
+    # have to accept the union of them just to be constructible. Mirrors what
+    # training/wifi_bc_training.py does for its best-checkpoint eval.
+    import inspect as _inspect
+    _accepted = _inspect.signature(sim_cls.__init__).parameters
+    if not any(p.kind is _inspect.Parameter.VAR_KEYWORD for p in _accepted.values()):
+        dropped = sorted(set(sim_kwargs) - set(_accepted))
+        if dropped:
+            print(f"{sim_cls.__name__} does not take {dropped}; omitting.")
+        sim_kwargs = {k: v for k, v in sim_kwargs.items() if k in _accepted}
     sim = sim_cls(**sim_kwargs)
 
     all_results = []

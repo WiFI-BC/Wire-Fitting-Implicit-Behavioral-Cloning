@@ -11,6 +11,12 @@ dependencies = [
     "torchvision>=0.24",      # ResNet-18 image encoder (pixel observations)
     "minari[all]>=0.5.3",     # D4RL datasets: Adroit Pen, Franka Kitchen
     "gymnasium-robotics>=1.4.2",
+    # gymnasium-robotics 1.4.2 declares `mujoco>=2.2.0` with no upper bound, but
+    # MuJoCo 3.13 is newer than the library and breaks FrankaKitchen-v1: building
+    # it asserts inside gymnasium_robotics.utils.mujoco_utils.get_joint_qpos.
+    # 3.8.1 and 3.3.5 were both verified working, so cap below 3.9 until
+    # gymnasium-robotics supports the newer joint handling.
+    "mujoco>=3.3,<3.9",
     "matplotlib>=3.10.8",     # Point Maze multimodality plots
     "pillow>=10.0",           # Particle episode GIFs
     "wandb>=0.18.0",          # training metrics; set WANDB_MODE=offline to skip
@@ -36,6 +42,7 @@ pushing = [
 # does not exist yet would break a plain `uv sync` for everyone who never uses
 # LIBERO. The robosuite/gym/bddl/easydict pins match what LIBERO 0.1.0 requires.
 libero = [
+    "libero",
     "robosuite==1.4.0",
     "bddl==1.0.1",
     "easydict==1.9",
@@ -62,3 +69,6 @@ override-dependencies = ["opencv-python; sys_platform == 'never'"]
 
 [tool.setuptools.packages.find]
 include = ["wifi_bc*", "baselines*", "envs*", "training*"]
+
+[tool.uv.sources]
+libero = { path = "third_party/LIBERO", editable = true }

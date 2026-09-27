@@ -31,16 +31,14 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from wifi_bc.config import resolve_active_env, resolve_env_config  # noqa: E402
+from wifi_bc.config import (default_checkpoint_dir, resolve_active_env,
+                            resolve_config_path, resolve_env_config)  # noqa: E402
 
 from baselines.diffusion import build_denoiser, build_diffusion, resolve_dp_params
 from wifi_bc.normalizations import ObservationNormalizer
 
 # ── Config (WIFI_BC_CONFIG_PATH overrides the shipped file) ─────────────────
-config_path = Path(
-    os.environ.get("WIFI_BC_CONFIG_PATH")
-    or (Path(__file__).resolve().parent.parent / "config" / "config.json")
-)
+config_path = resolve_config_path()
 with open(config_path, "r") as f:
     config = json.load(f)
 
@@ -70,7 +68,9 @@ num_workers = int(env_config.get(
 ))
 log_interval = int(training_shared.get("log_interval", 1000))
 save_interval = int(training_shared.get("save_interval", 10000))
-MODEL_SAVE_DIR = training_shared.get("model_save_dir", "checkpoints")
+MODEL_SAVE_DIR = training_shared.get(
+    "model_save_dir", default_checkpoint_dir("diffusion_policy", active_env)
+)
 
 dp = resolve_dp_params(env_config, training_shared)
 
@@ -100,6 +100,13 @@ def load_dataset():
     elif active_env == "pushing_pixels":
         from envs.datasets import PushingPixelsDataset
         return PushingPixelsDataset(data_dir=env_config["data_dir"], frame_stack=frame_stack)
+    elif active_env == "point_maze_pillar":
+        from envs.datasets import PointMazePillarDataset
+        return PointMazePillarDataset(
+            size=20000,
+            max_steps_per_episode=env_config.get("max_episode_steps", 400),
+            frame_stack=frame_stack,
+        )
     elif active_env == "libero_goal_pixels":
         from envs.datasets import LiberoGoalPixelsDataset
         return LiberoGoalPixelsDataset(

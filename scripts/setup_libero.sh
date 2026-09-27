@@ -33,15 +33,30 @@ touch third_party/LIBERO/libero/__init__.py
 #    error. Declaring it (rather than `uv pip install`) is what keeps uv's
 #    auto-sync from pruning it on the next `uv run`.
 echo "[2/4] registering LIBERO and syncing the environment ..."
-if ! grep -q '^libero = { path = "third_party/LIBERO"' pyproject.toml; then
-  uv add --editable third_party/LIBERO --optional libero
-fi
+# Register the clone by editing pyproject directly. `uv add --editable` is NOT
+# usable here: for a path inside the project it creates a WORKSPACE MEMBER, and
+# LIBERO ships only a setup.py, so uv then refuses to sync with
+# "missing a pyproject.toml". A [tool.uv.sources] path entry is what we want.
+python3 - <<'PY'
+import re, pathlib
+p = pathlib.Path("pyproject.toml"); s = p.read_text()
+if "[tool.uv.sources]" not in s:
+    s = s.rstrip() + '\n\n[tool.uv.sources]\nlibero = { path = "third_party/LIBERO", editable = true }\n'
+if '"libero",' not in s:
+    s = s.replace("libero = [\n", 'libero = [\n    "libero",\n', 1)
+p.write_text(s)
+print("  pyproject: libero source + dependency registered")
+PY
 uv sync --extra libero
 
 # Sanity check. Do NOT import robosuite here: it initializes a GL context at
 # import time and fails on a machine without a GPU. It is only exercised later,
 # during evaluation, with MUJOCO_GL set.
-uv run python -c "import libero; from libero.libero import benchmark; benchmark.get_benchmark_dict(); print('libero OK:', libero.__file__)"
+# `import envs.libero` FIRST: LIBERO prompts on stdin the first time it is
+# imported without a config file, which is an EOFError in any non-interactive
+# shell. envs/libero.py writes that config (pointing at <repo>/.libero) as an
+# import side effect, so it has to come first.
+uv run python -c "import envs.libero; import libero; from libero.libero import benchmark; benchmark.get_benchmark_dict(); print('libero OK:', libero.__file__)"
 
 # 3. Download the libero_goal demonstrations. LIBERO's own downloader prompts
 #    interactively; scripts/download_libero_goal.py answers for it and forces
@@ -76,6 +91,6 @@ Setup done. The remaining step renders with MuJoCo and needs a GPU:
 Then train and evaluate:
 
   uv run python -m training.wifi_bc_training --env libero_goal_pixels
-  uv run python -m envs.evaluate --checkpoint checkpoints --env libero_goal_pixels
+  uv run python -m envs.evaluate --checkpoint checkpoints/wifi_bc/libero_goal_pixels --env libero_goal_pixels
 =============================================================================
 NEXT

@@ -110,26 +110,40 @@
           "model": {}
         },
         "ibc": {
-          "hparams": {
-            "BATCH_SIZE": 512,
-            "GRADIENT_MARGIN": 1.0,
-            "HIDDEN_DIMS": [
+          "training": {
+            "batch_size": 512,
+            "gradient_margin": 1.0,
+            "hidden_dims": [
               256,
               256
             ],
-            "LANGEVIN_DELTA_ACTION_CLIP": 0.1,
-            "LANGEVIN_NOISE_SCALE": 1.0,
-            "LANGEVIN_STEPSIZE_FINAL": 1e-05,
-            "LANGEVIN_STEPSIZE_INIT": 0.1,
-            "LANGEVIN_STEPSIZE_POWER": 2.0,
-            "LANGEVIN_TRAIN_ITERATIONS": 100,
-            "LEARNING_RATE": 0.001,
-            "LR_DECAY_RATE": 0.995,
-            "LR_DECAY_STEPS": 100,
-            "NUM_COUNTER_EXAMPLES": 32,
-            "SOFTMAX_TEMPERATURE": 0.5,
-            "TRAINING_STEPS": 100000,
-            "UNIFORM_BOUNDARY_BUFFER": 0.05
+            "langevin_delta_action_clip": 0.1,
+            "langevin_noise_scale": 1.0,
+            "langevin_stepsize_final": 1e-05,
+            "langevin_stepsize_init": 0.1,
+            "langevin_stepsize_power": 2.0,
+            "langevin_train_iterations": 100,
+            "learning_rate": 0.001,
+            "lr_decay_rate": 0.995,
+            "lr_decay_steps": 100,
+            "num_counter_examples": 32,
+            "softmax_temperature": 0.5,
+            "training_steps": 100000,
+            "uniform_boundary_buffer": 0.05
+          }
+        },
+        "consistency_policy": {
+          "training": {
+            "batch_size": 512,
+            "cp_phase": "both",
+            "cp_student_steps": 150000,
+            "cp_teacher_steps": 300000,
+            "denoiser_depth": 1,
+            "denoiser_network_kind": "dense_resnet",
+            "denoiser_width": 1024,
+            "learning_rate": 0.0003,
+            "time_emb_dim": 128,
+            "training_steps": 300000
           }
         }
       }
@@ -243,6 +257,20 @@
             "training_steps": 100000
           },
           "model": {}
+        },
+        "consistency_policy": {
+          "training": {
+            "batch_size": 512,
+            "cp_phase": "both",
+            "cp_student_steps": 100000,
+            "cp_teacher_steps": 200000,
+            "denoiser_depth": 4,
+            "denoiser_network_kind": "resnet",
+            "denoiser_width": 128,
+            "learning_rate": 0.001,
+            "time_emb_dim": 128,
+            "training_steps": 200000
+          }
         }
       }
     },
@@ -364,6 +392,21 @@
             "training_steps": 750000
           },
           "model": {}
+        },
+        "consistency_policy": {
+          "training": {
+            "batch_size": 128,
+            "cp_phase": "both",
+            "cp_student_feature_cache": true,
+            "cp_student_steps": 75000,
+            "cp_teacher_steps": 150000,
+            "denoiser_depth": 1,
+            "denoiser_network_kind": "dense_resnet",
+            "denoiser_width": 1024,
+            "learning_rate": 0.0003,
+            "time_emb_dim": 128,
+            "training_steps": 150000
+          }
         }
       }
     },
@@ -486,10 +529,10 @@
           "model": {}
         },
         "ibc": {
-          "hparams": {
-            "BATCH_SIZE": 512,
-            "GRADIENT_MARGIN": 1.0,
-            "HIDDEN_DIMS": [
+          "training": {
+            "batch_size": 512,
+            "gradient_margin": 1.0,
+            "hidden_dims": [
               512,
               512,
               512,
@@ -499,27 +542,41 @@
               512,
               512
             ],
-            "INFERENCE_DECAY_POWER": 2.0,
-            "INFERENCE_DELTA_CLIP": 0.5,
-            "INFERENCE_LR_FINAL": 1e-05,
-            "INFERENCE_LR_INIT": 0.5,
-            "INFERENCE_NOISE_SCALE": 0.5,
-            "INFERENCE_NUM_ITERATIONS": 100,
-            "INFERENCE_NUM_SAMPLES": 512,
-            "LANGEVIN_DELTA_ACTION_CLIP": 0.5,
-            "LANGEVIN_NOISE_SCALE": 0.5,
-            "LANGEVIN_STEPSIZE_FINAL": 1e-05,
-            "LANGEVIN_STEPSIZE_INIT": 0.5,
-            "LANGEVIN_STEPSIZE_POWER": 2.0,
-            "LANGEVIN_TRAIN_ITERATIONS": 100,
-            "LEARNING_RATE": 0.0005,
-            "LR_DECAY_RATE": 0.99,
-            "LR_DECAY_STEPS": 100,
-            "NUM_COUNTER_EXAMPLES": 8,
-            "Q_USE_SPECTRAL_NORM": true,
-            "SOFTMAX_TEMPERATURE": 1.0,
-            "TRAINING_STEPS": 100000,
-            "UNIFORM_BOUNDARY_BUFFER": 0.05
+            "inference_decay_power": 2.0,
+            "inference_delta_clip": 0.5,
+            "inference_lr_final": 1e-05,
+            "inference_lr_init": 0.5,
+            "inference_noise_scale": 0.5,
+            "inference_num_iterations": 100,
+            "inference_num_samples": 512,
+            "langevin_delta_action_clip": 0.5,
+            "langevin_noise_scale": 0.5,
+            "langevin_stepsize_final": 1e-05,
+            "langevin_stepsize_init": 0.5,
+            "langevin_stepsize_power": 2.0,
+            "langevin_train_iterations": 100,
+            "learning_rate": 0.0005,
+            "lr_decay_rate": 0.99,
+            "lr_decay_steps": 100,
+            "num_counter_examples": 8,
+            "q_use_spectral_norm": true,
+            "softmax_temperature": 1.0,
+            "training_steps": 100000,
+            "uniform_boundary_buffer": 0.05
+          }
+        },
+        "consistency_policy": {
+          "training": {
+            "batch_size": 512,
+            "cp_phase": "both",
+            "cp_student_steps": 50000,
+            "cp_teacher_steps": 100000,
+            "denoiser_depth": 8,
+            "denoiser_network_kind": "mlp",
+            "denoiser_width": 512,
+            "learning_rate": 0.0005,
+            "time_emb_dim": 128,
+            "training_steps": 100000
           }
         }
       }
@@ -650,10 +707,10 @@
           "model": {}
         },
         "ibc": {
-          "hparams": {
-            "BATCH_SIZE": 512,
-            "GRADIENT_MARGIN": 1.0,
-            "HIDDEN_DIMS": [
+          "training": {
+            "batch_size": 512,
+            "gradient_margin": 1.0,
+            "hidden_dims": [
               512,
               512,
               512,
@@ -663,36 +720,51 @@
               512,
               512
             ],
-            "INFERENCE_AGAIN_NOISE_SCALE": 0.5,
-            "INFERENCE_AGAIN_STEPSIZE_FINAL": 1e-05,
-            "INFERENCE_AGAIN_STEPSIZE_INIT": 1e-05,
-            "INFERENCE_DECAY_POWER": 2.0,
-            "INFERENCE_DELTA_CLIP": 0.5,
-            "INFERENCE_LR_FINAL": 1e-05,
-            "INFERENCE_LR_INIT": 0.5,
-            "INFERENCE_NOISE_SCALE": 1.0,
-            "INFERENCE_NOISE_VIA_STEPSIZE": true,
-            "INFERENCE_NUM_ITERATIONS": 100,
-            "INFERENCE_NUM_SAMPLES": 512,
-            "INFERENCE_OPTIMIZE_AGAIN": true,
-            "KITCHEN_QPOS_ONLY": true,
-            "LANGEVIN_DELTA_ACTION_CLIP": 0.5,
-            "LANGEVIN_NOISE_SCALE": 0.5,
-            "LANGEVIN_STEPSIZE_FINAL": 1e-05,
-            "LANGEVIN_STEPSIZE_INIT": 0.5,
-            "LANGEVIN_STEPSIZE_POWER": 2.0,
-            "LANGEVIN_TRAIN_ITERATIONS": 100,
-            "LEARNING_RATE": 0.0005,
-            "LR_DECAY_RATE": 0.99,
-            "LR_DECAY_STEPS": 100,
-            "NETWORK_KIND": "resnet",
-            "NUM_COUNTER_EXAMPLES": 8,
-            "Q_USE_SPECTRAL_NORM": true,
-            "RESNET_FINAL_ACTIVATION": false,
-            "SOFTMAX_TEMPERATURE": 1.0,
-            "TRAINING_STEPS": 100000,
-            "UNIFORM_BOUNDARY_BUFFER": 0.05,
-            "USE_SQRT_STD": true
+            "inference_again_noise_scale": 0.5,
+            "inference_again_stepsize_final": 1e-05,
+            "inference_again_stepsize_init": 1e-05,
+            "inference_decay_power": 2.0,
+            "inference_delta_clip": 0.5,
+            "inference_lr_final": 1e-05,
+            "inference_lr_init": 0.5,
+            "inference_noise_scale": 1.0,
+            "inference_noise_via_stepsize": true,
+            "inference_num_iterations": 100,
+            "inference_num_samples": 512,
+            "inference_optimize_again": true,
+            "kitchen_qpos_only": true,
+            "langevin_delta_action_clip": 0.5,
+            "langevin_noise_scale": 0.5,
+            "langevin_stepsize_final": 1e-05,
+            "langevin_stepsize_init": 0.5,
+            "langevin_stepsize_power": 2.0,
+            "langevin_train_iterations": 100,
+            "learning_rate": 0.0005,
+            "lr_decay_rate": 0.99,
+            "lr_decay_steps": 100,
+            "network_kind": "resnet",
+            "num_counter_examples": 8,
+            "q_use_spectral_norm": true,
+            "resnet_final_activation": false,
+            "softmax_temperature": 1.0,
+            "training_steps": 100000,
+            "uniform_boundary_buffer": 0.05,
+            "use_sqrt_std": true
+          }
+        },
+        "consistency_policy": {
+          "training": {
+            "batch_size": 512,
+            "cp_phase": "both",
+            "cp_student_steps": 75000,
+            "cp_teacher_steps": 150000,
+            "denoiser_depth": 4,
+            "denoiser_network_kind": "resnet",
+            "denoiser_width": 512,
+            "kitchen_qpos_only": true,
+            "learning_rate": 0.0005,
+            "time_emb_dim": 128,
+            "training_steps": 150000
           }
         }
       }
@@ -810,19 +882,19 @@
             "encoder_kind": "resnet18",
             "encoder_norm_kind": "gn",
             "encoder_num_kp": 128,
-            "encoder_pretrained": "imagenet"
+            "encoder_pretrained": false
           }
         },
         "ibc": {
-          "hparams": {
-            "BATCH_SIZE": 128,
-            "COND_FUSION": "concat",
-            "ENCODER_KIND": "resnet18",
-            "ENCODER_NORM_KIND": "gn",
-            "ENCODER_NUM_KP": 128,
-            "ENCODER_PRETRAINED": false,
-            "GRADIENT_MARGIN": 1.0,
-            "HIDDEN_DIMS": [
+          "training": {
+            "batch_size": 128,
+            "cond_fusion": "concat",
+            "encoder_kind": "resnet18",
+            "encoder_norm_kind": "gn",
+            "encoder_num_kp": 128,
+            "encoder_pretrained": false,
+            "gradient_margin": 1.0,
+            "hidden_dims": [
               512,
               512,
               512,
@@ -832,30 +904,30 @@
               512,
               512
             ],
-            "IMAGE_CROP": 116,
-            "INFERENCE_DECAY_POWER": 2.0,
-            "INFERENCE_DELTA_CLIP": 0.1,
-            "INFERENCE_LR_FINAL": 1e-05,
-            "INFERENCE_LR_INIT": 0.1,
-            "INFERENCE_NOISE_SCALE": 0.1,
-            "INFERENCE_NUM_ITERATIONS": 100,
-            "INFERENCE_NUM_SAMPLES": 2048,
-            "LANGEVIN_DELTA_ACTION_CLIP": 0.1,
-            "LANGEVIN_NOISE_SCALE": 0.1,
-            "LANGEVIN_STEPSIZE_FINAL": 1e-05,
-            "LANGEVIN_STEPSIZE_INIT": 0.1,
-            "LANGEVIN_STEPSIZE_POWER": 2.0,
-            "LANGEVIN_TRAIN_ITERATIONS": 100,
-            "LEARNING_RATE": 0.001,
-            "LR_DECAY_RATE": 0.99,
-            "LR_DECAY_STEPS": 100,
-            "NUM_COUNTER_EXAMPLES": 8,
-            "Q_USE_SPECTRAL_NORM": false,
-            "SOFTMAX_TEMPERATURE": 1.0,
-            "TRAINING_STEPS": 150000,
-            "UNIFORM_BOUNDARY_BUFFER": 0.05,
-            "VALUE_NUM_BLOCKS": 1,
-            "VALUE_WIDTH": 1024
+            "image_crop": 116,
+            "inference_decay_power": 2.0,
+            "inference_delta_clip": 0.1,
+            "inference_lr_final": 1e-05,
+            "inference_lr_init": 0.1,
+            "inference_noise_scale": 0.1,
+            "inference_num_iterations": 100,
+            "inference_num_samples": 2048,
+            "langevin_delta_action_clip": 0.1,
+            "langevin_noise_scale": 0.1,
+            "langevin_stepsize_final": 1e-05,
+            "langevin_stepsize_init": 0.1,
+            "langevin_stepsize_power": 2.0,
+            "langevin_train_iterations": 100,
+            "learning_rate": 0.001,
+            "lr_decay_rate": 0.99,
+            "lr_decay_steps": 100,
+            "num_counter_examples": 8,
+            "q_use_spectral_norm": false,
+            "softmax_temperature": 1.0,
+            "training_steps": 150000,
+            "uniform_boundary_buffer": 0.05,
+            "value_num_blocks": 1,
+            "value_width": 1024
           }
         },
         "diffusion_policy": {
@@ -887,10 +959,33 @@
           },
           "model": {
             "encoder_kind": "resnet18",
-            "encoder_pretrained": "imagenet",
+            "encoder_pretrained": false,
             "encoder_norm_kind": "gn",
             "encoder_num_kp": 128,
             "encoder_per_camera": false
+          }
+        },
+        "consistency_policy": {
+          "training": {
+            "action_chunk": 16,
+            "batch_size": 128,
+            "cp_phase": "both",
+            "cp_student_steps": 100000,
+            "cp_teacher_steps": 200000,
+            "denoiser_depth": 1,
+            "denoiser_network_kind": "dense_resnet",
+            "denoiser_width": 1024,
+            "encoder_lr_scale": 0.1,
+            "image_crop_size": 116,
+            "learning_rate": 0.0002,
+            "time_emb_dim": 128,
+            "training_steps": 200000
+          },
+          "model": {
+            "encoder_kind": "resnet18",
+            "encoder_norm_kind": "gn",
+            "encoder_num_kp": 128,
+            "encoder_pretrained": false
           }
         }
       }
@@ -945,6 +1040,36 @@
           300
         ],
         "num_episodes": 3
+      }
+    },
+    "reach": {
+      "env_id": "Reach-v0",
+      "state_dim": 4,
+      "action_dim": 2,
+      "frame_stack": 1,
+      "action_bounds": [
+        -1.0,
+        1.0
+      ],
+      "max_episode_steps": 50,
+      "num_eval_seeds": 20,
+      "goal_radius": 0.05,
+      "training": {
+        "training_steps": 20000,
+        "learning_rate": 0.001,
+        "batch_size": 256,
+        "top_k_control_points": 5,
+        "separation_loss": "entropy",
+        "entropy_bandwidth": 0.1,
+        "scheduler_type": "cosine",
+        "estimator_learning_rate": 0.001,
+        "langevin_num_iterations": 0,
+        "inference_langevin_iterations": 0
+      },
+      "model": {
+        "control_points": 10,
+        "num_hidden_layers": 2,
+        "num_neurons": 256
       }
     }
   },

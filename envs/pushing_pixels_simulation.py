@@ -190,3 +190,87 @@ class PushingPixelsSimulation(BaseSimulation):
         summary["avg_min_dist_to_target"] = float(np.mean(finite_dists)) if finite_dists else float("inf")
         summary["std_min_dist_to_target"] = float(np.std(finite_dists)) if finite_dists else float("inf")
         return summary
+
+
+class PushingPixelsIBCSimulation(PushingPixelsSimulation):
+    """Original-IBC (pure pixel EBM) evaluation on PushingPixels-v0.
+
+    Reuses PushingPixelsSimulation's env, channel-wise frame stacking and
+    action denormalization, but selects actions the way IBC does: no control
+    points at all, just Langevin MCMC over the energy net's action argument.
+
+    As in the LIBERO pixel evaluator, the image is encoded ONCE per env step
+    and the chain runs against the value head on those features (late fusion),
+    so a 100-iteration chain costs one conv forward, not a hundred.
+    """
+
+    def __init__(
+        self,
+        energy_net: torch.nn.Module,
+        device: str = "cpu",
+        max_episode_steps: int = 100,
+        frame_stack: int = 1,
+        norm_stats: Optional[dict] = None,
+        langevin_cfg: Optional[dict] = None,
+        goal_dist_tolerance: float = 0.02,
+        action_in_model_range: tuple[float, float] = (-1.0, 1.0),
+        uniform_boundary_buffer: float = 0.05,
+    ) -> None:
+        super().__init__(
+            control_point_generator=None,
+            q_estimator=energy_net,
+            device=device,
+            max_episode_steps=max_episode_steps,
+            frame_stack=frame_stack,
+            norm_stats=norm_stats,
+            goal_dist_tolerance=goal_dist_tolerance,
+        )
+        self.energy_net = energy_net
+        self.langevin_cfg = dict(langevin_cfg or {})
+        lo, hi = float(action_in_model_range[0]), float(action_in_model_range[1])
+        buf = float(uniform_boundary_buffer)
+        # The chain is allowed slightly outside the action box, matching the
+        # official implementation's uniform_boundary_buffer; the env clips.
+        adim = int(self.env_action_dim)
+        self._amin = torch.full((adim,), lo - buf, device=device)
+        self._amax = torch.full((adim,), hi + buf, device=device)
+
+    @property
+    def env_action_dim(self) -> int:
+        """Action width the energy net was trained on."""
+        if self._raw_act_min is not None:
+            return int(np.asarray(self._raw_act_min).reshape(-1).shape[0])
+        return 2  # PushingPixels-v0 is a 2-D end-effector setpoint
+
+    def select_action(self, observation: np.ndarray, return_q_range: bool = False):
+        from wifi_bc.sampling import sample_langevin
+
+        obs_tensor = self._obs_to_tensor(observation)  # (1, C, H, W) uint8
+        c = self.langevin_cfg
+        with torch.no_grad():
+            feats = self.energy_net.encode(obs_tensor)  # (1, F) — once per step
+
+        samples = sample_langevin(
+            energy_function=lambda o, a: self.energy_net.score(feats, a).squeeze(-1),
+            observations=obs_tensor,  # batch-size / device carrier only
+            num_samples=int(c.get("num_samples", 512)),
+            action_min=self._amin,
+            action_max=self._amax,
+            num_iterations=int(c.get("num_iterations", 100)),
+            lr_init=float(c.get("lr_init", 0.1)),
+            lr_final=float(c.get("lr_final", 1e-5)),
+            polynomial_decay_power=float(c.get("polynomial_decay_power", 2.0)),
+            delta_action_clip=float(c.get("delta_action_clip", 0.1)),
+            noise_scale=float(c.get("noise_scale", 0.1)),
+            device=self.device,
+            noise_via_stepsize=bool(c.get("noise_via_stepsize", False)),
+        )
+        with torch.no_grad():
+            e = self.energy_net.score(feats, samples).squeeze(-1)  # (1, N)
+            best = samples[0, e.argmin(dim=-1)[0]].cpu().numpy()
+            q_range = (float(-e.max()), float(-e.min()))
+
+        action = self._denormalize_action(best)
+        if return_q_range:
+            return action, q_range
+        return action

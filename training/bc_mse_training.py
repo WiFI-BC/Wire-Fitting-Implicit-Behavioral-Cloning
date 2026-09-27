@@ -35,13 +35,13 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from wifi_bc.config import resolve_active_env, resolve_env_config  # noqa: E402
+from wifi_bc.config import (default_checkpoint_dir, resolve_active_env,
+                            resolve_config_path, resolve_env_config)  # noqa: E402
 
 from wifi_bc.models import BCPolicy
 from wifi_bc.normalizations import ObservationNormalizer
 
-config_path = Path(os.environ.get("WIFI_BC_CONFIG_PATH")
-                   or (Path(__file__).resolve().parent.parent / "config" / "config.json"))
+config_path = resolve_config_path()
 with open(config_path) as f:
     config = json.load(f)
 
@@ -58,7 +58,9 @@ PIXEL_ENVS = ("pushing_pixels", "libero_goal_pixels")
 training_steps = env_training.get("training_steps", training_shared.get("training_steps", 100000))
 batch_size = env_training.get("batch_size", training_shared.get("batch_size", 128))
 learning_rate = env_training.get("learning_rate", training_shared.get("learning_rate", 1e-3))
-MODEL_SAVE_DIR = training_shared.get("model_save_dir", "checkpoints")
+MODEL_SAVE_DIR = training_shared.get(
+    "model_save_dir", default_checkpoint_dir("bc_mse", active_env)
+)
 log_interval = training_shared.get("log_interval", 1000)
 save_interval = training_shared.get("save_interval", 10000)
 scheduler_type = env_training.get("scheduler_type", training_shared.get("scheduler_type", "cosine"))
@@ -180,6 +182,14 @@ def main() -> int:
               "action_chunk": int(getattr(dataset, "action_chunk", 1)),
               "bc_width": bc_width, "bc_depth": bc_depth,
               "cond_dim": cond_dim}
+        if not is_pixels:
+            # Flat-state envs: record the exact policy input width and the
+            # column selection used. kitchen_qpos_only trims the observation to
+            # 30-D, well below the config's state_dim of 59, and without this
+            # evaluation rebuilt a 59-wide network and failed to load the
+            # checkpoint. The other trainers already persist both.
+            ns["state_shape"] = int(dataset.state_shape)
+            ns["obs_indices"] = getattr(dataset, "obs_indices", None)
         if is_pixels:
             ns.update(in_channels=dataset.state_shape[0], state_shape=list(dataset.state_shape),
                       image_hw=list(dataset.state_shape[1:]),

@@ -616,5 +616,24 @@
         100.0
       ]
     }
+  },
+  "Reach-v0": {
+    "description": "Observation bounds for Reach-v0 (agent xy + goal xy, both in the unit square).",
+    "source": "Analytic: the environment defines its observation space as Box(0, 1).",
+    "observation_dim": 4,
+    "flat_bounds": {
+      "min": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
   }
 }

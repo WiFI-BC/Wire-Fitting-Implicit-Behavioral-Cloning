@@ -27,7 +27,8 @@ import wandb
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from wifi_bc.config import resolve_active_env, resolve_env_config  # noqa: E402
+from wifi_bc.config import (default_checkpoint_dir, resolve_active_env,
+                            resolve_config_path, resolve_env_config)  # noqa: E402
 from wifi_bc.models import (
     ControlPointGenerator,
     QEstimator,
@@ -40,10 +41,7 @@ from wifi_bc.sampling import sample_langevin
 
 # Load config. WIFI_BC_CONFIG_PATH overrides the shipped file, so a run can be
 # pointed at an alternative config without editing it in place.
-config_path = Path(
-    os.environ.get("WIFI_BC_CONFIG_PATH")
-    or (Path(__file__).resolve().parent.parent / "config" / "config.json")
-)
+config_path = resolve_config_path()
 with open(config_path, "r") as f:
     config = json.load(f)
 
@@ -68,7 +66,9 @@ generator_infonce_weight = env_training.get(
     training_shared.get("generator_infonce_weight", 0.05),
 )
 
-MODEL_SAVE_DIR = training_shared.get("model_save_dir", "checkpoints")
+MODEL_SAVE_DIR = training_shared.get(
+    "model_save_dir", default_checkpoint_dir("wifi_bc", active_env)
+)
 log_interval = training_shared.get("log_interval", 1000)
 save_interval = training_shared.get("save_interval", 10000)
 
@@ -339,6 +339,13 @@ def load_dataset(split="train"):
             action_chunk=int(env_config.get("training", {}).get("action_chunk", 1)),
             cameras=str(env_config.get("libero_cameras", "agentview+wrist")),
             use_proprio=bool(env_config.get("libero_use_proprio", True)),
+        )
+    elif active_env == "reach":
+        from envs.datasets import ReachDataset
+        return ReachDataset(
+            size=20000,
+            frame_stack=frame_stack,
+            goal_radius=env_config.get("goal_radius", 0.05),
         )
     elif active_env == "point_maze_pillar":
         from envs.datasets import PointMazePillarDataset
@@ -785,7 +792,24 @@ def main():
             "cp_selection": str(env_training.get("cp_selection", "argmax")),
             "cp_selection_temperature": float(env_training.get("cp_selection_temperature", 1.0)),
         }
-        # libero_goal_pixels: persist the pixel + conditioning schema so the
+        # Every pixel env: persist the channel count and encoder architecture.
+        # Rebuilding these from the config is wrong as soon as frame_stack is
+        # not 1 — config state_dim fixes the channel width at 3 per camera, but
+        # a 2-frame stack trains with twice that, and the checkpoint then fails
+        # to load. Only libero used to record them.
+        if active_env in ("pushing_pixels", "libero_goal_pixels"):
+            norm_stats["in_channels"] = int(dataset.state_shape[0])
+            norm_stats["state_shape"] = list(dataset.state_shape)
+            norm_stats["encoder_target_height"] = env_config.get("encoder_target_height", 180)
+            norm_stats["encoder_target_width"] = env_config.get("encoder_target_width", 240)
+            norm_stats["encoder_kind"] = env_model.get("encoder_kind", "conv_maxpool")
+            norm_stats["encoder_pretrained"] = bool(env_model.get("encoder_pretrained", False))
+            norm_stats["encoder_num_kp"] = int(env_model.get("encoder_num_kp", 64))
+            norm_stats["encoder_norm_kind"] = env_model.get("encoder_norm_kind", "bn")
+            norm_stats["encoder_per_camera"] = bool(env_model.get("encoder_per_camera", False))
+            norm_stats["value_width"] = int(env_model.get("value_width", 1024))
+            norm_stats["value_num_blocks"] = int(env_model.get("value_num_blocks", 1))
+        # libero_goal_pixels: persist the conditioning schema too, so the
         # render-eval sim rebuilds an identical (image, cond) input.
         if active_env == "libero_goal_pixels":
             norm_stats["libero_obs_keys"] = dataset.libero_obs_keys      # proprio keys

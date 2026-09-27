@@ -68,6 +68,38 @@ def resolve_env_config(config: dict, active_env: str, method: str = "wifi_bc") -
     return _deep_merge(env_config, overrides)
 
 
+def default_checkpoint_dir(method: str, active_env: str) -> str:
+    """Where a run writes its weights when the config does not say.
+
+    Namespaced by method and environment, because every method used to default
+    to a bare `checkpoints/` and their files have different names. Training two
+    methods in a row left both sets side by side, and evaluation — which infers
+    the method from the files present — then picked whichever its checks
+    happened to test first.
+    """
+    return str(Path("checkpoints") / method / active_env)
+
+
+def resolve_config_path(argv: list[str] | None = None) -> Path:
+    """Config file for this run: `--config <path>` on the command line, else
+    WIFI_BC_CONFIG_PATH, else the shipped `config/config.json`.
+
+    The training scripts build their module state at import time, before any
+    argparse runs, so `--config` is read here. Without this they silently
+    ignored the flag and trained on the shipped config instead — a sweep that
+    believed it had set 60 steps ran 300,000.
+    """
+    import sys
+
+    argv = sys.argv[1:] if argv is None else argv
+    for i, arg in enumerate(argv):
+        if arg == "--config" and i + 1 < len(argv):
+            return Path(argv[i + 1])
+        if arg.startswith("--config="):
+            return Path(arg.split("=", 1)[1])
+    return config_path()
+
+
 def resolve_active_env(config: dict, argv: list[str] | None = None) -> str:
     """Which environment to run: `--env <name>` on the command line, else
     WIFI_BC_ENV, else the config's `active_env`.

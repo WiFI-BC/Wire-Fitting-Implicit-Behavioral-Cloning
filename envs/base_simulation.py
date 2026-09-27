@@ -161,6 +161,13 @@ class BaseSimulation(ABC):
             "total_reward": total_reward,
             "terminated": terminated,
             "truncated": truncated,
+            # Gymnasium's convention: the env reports task success in `info`.
+            # Reported here so an environment added later gets a correct success
+            # rate without overriding this method — every environment shipped in
+            # the paper overrides it, which used to hide the fact that the base
+            # class silently returned no success at all (so a new env scored 0%
+            # however well it did).
+            "success": bool(info.get("success", info.get("is_success", False))),
         }
 
     def run_simulation(

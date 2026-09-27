@@ -102,6 +102,22 @@ def compute_dataset_stats(dataset):
     }
 
 
+def hparams_from_env_config(env_cfg: dict) -> dict:
+    """IBC hyperparameters for an environment, merged onto the defaults.
+
+    IBC names its hyperparameters in UPPERCASE internally, which the other four
+    methods do not. So that `config.json` reads the same for every method, the
+    canonical config surface is a lowercase `training` block exactly like
+    theirs, and the keys are upper-cased here. A legacy UPPERCASE `hparams`
+    block is still honoured, and wins where both set the same key.
+    """
+    merged = dict(DEFAULT_IBC_HPARAMS)
+    for key, value in (env_cfg.get("training") or {}).items():
+        merged[key.upper()] = value
+    merged.update(env_cfg.get("hparams") or {})
+    return merged
+
+
 def inference_config(hparams: dict) -> dict:
     """The Langevin settings `evaluate_ibc_checkpoint` runs inference with.
 
@@ -215,7 +231,9 @@ def train_ibc(hparams: dict, active_env: str = "particle",
         actions normalized per-dim to [0, 1] inside the train loop.
       - pen/kitchen: D4RLDataset, standardize obs normalization from dataset
         stats (paper-faithful), actions already in [-1, 1] from D4RLDataset.
-      - libero_goal_pixels: PixelQEstimator over the two camera streams.
+      - pushing: PushingDataset, standardized obs, actions already in [-1, 1].
+      - pushing_pixels / libero_goal_pixels: PixelQEstimator over the image
+        streams; only libero carries a conditioning vector.
     """
     # Deterministic seeding — same trial_seed ⇒ same training trajectory.
     seed = int(hparams.get("trial_seed", 0))
@@ -306,6 +324,63 @@ def train_ibc(hparams: dict, active_env: str = "particle",
             obs_mean=dataset.obs_mean,
             obs_std=obs_std_divisor,
         )
+    elif active_env == "pushing":
+        from envs.datasets import PushingDataset
+        dataset = PushingDataset(
+            data_dir=env_cfg["data_dir"], frame_stack=frame_stack,
+            normalize_actions=True, action_norm_range=(-1.0, 1.0),
+        )
+        # Same contract as the D4RL envs: the dataset hands back per-dim
+        # min-max-normalized actions, so the train loop does not renormalize.
+        action_in_model_range = (-1.0, 1.0)
+        per_batch_action_norm = False
+        # Pushing obs are standardized from dataset statistics, matching what
+        # WiFI-BC and Diffusion Policy do on this task so the comparison is not
+        # confounded by a different input scaling. USE_SQRT_STD is the IBC
+        # paper's damped whitening; see the D4RL branch above.
+        use_sqrt_std = bool(hparams.get("USE_SQRT_STD", True))
+        obs_std_divisor = (
+            np.sqrt(dataset.obs_std) if use_sqrt_std else dataset.obs_std
+        ).astype(np.float32)
+        norm_stats = {
+            "obs_mean": dataset.obs_mean.astype(np.float32),
+            "obs_std": obs_std_divisor,
+            "act_min": dataset.act_min.astype(np.float32),
+            "act_max": dataset.act_max.astype(np.float32),
+            "action_norm_range": (-1.0, 1.0),
+            "frame_stack": frame_stack,
+            "env_id": env_cfg["env_id"],
+            "use_sqrt_std": use_sqrt_std,
+        }
+        obs_normalizer = ObservationNormalizer(
+            env_id=env_cfg["env_id"], device=device,
+            frame_stack=frame_stack,
+            obs_mean=dataset.obs_mean,
+            obs_std=obs_std_divisor,
+        )
+    elif active_env == "pushing_pixels":
+        from envs.datasets import PushingPixelsDataset
+        dataset = PushingPixelsDataset(
+            data_dir=env_cfg["data_dir"], frame_stack=frame_stack,
+            normalize_actions=True, action_norm_range=(-1.0, 1.0),
+        )
+        action_in_model_range = (-1.0, 1.0)
+        per_batch_action_norm = False
+        # Pixel env with no conditioning vector: cond_dim 0 is what separates
+        # this from libero_goal_pixels, and it makes PixelQEstimator fall back
+        # to a plain image-only energy model.
+        norm_stats = {
+            "act_min": dataset.act_min.astype(np.float32),
+            "act_max": dataset.act_max.astype(np.float32),
+            "action_norm_range": (-1.0, 1.0),
+            "frame_stack": frame_stack,
+            "env_id": env_cfg["env_id"],
+            "cond_dim": 0,
+            "in_channels": int(dataset.state_shape[0]),
+            "state_shape": list(dataset.state_shape),
+        }
+        # The conv encoder does uint8 -> /255 -> resize internally.
+        obs_normalizer = None
     elif active_env == "libero_goal_pixels":
         from envs.datasets import LiberoGoalPixelsDataset
         dataset = LiberoGoalPixelsDataset(
@@ -364,7 +439,7 @@ def train_ibc(hparams: dict, active_env: str = "particle",
     # Official MLPEBM projects to the energy straight after the last resnet
     # block (no trailing activation). Default False = IBC-faithful.
     resnet_final_act = bool(hparams.get("RESNET_FINAL_ACTIVATION", False))
-    is_pixel = (active_env == "libero_goal_pixels")
+    is_pixel = active_env in ("libero_goal_pixels", "pushing_pixels")
     if is_pixel:
         # Official IBC pixel EBM (pixel_ebm_langevin.gin): ConvMaxpoolEncoder
         # + DenseResnetValue(width=VALUE_WIDTH, blocks=VALUE_NUM_BLOCKS), plus
@@ -386,18 +461,23 @@ def train_ibc(hparams: dict, active_env: str = "particle",
         enc_per_camera = bool(hparams.get("ENCODER_PER_CAMERA", False))
         cond_fusion = str(hparams.get("COND_FUSION", "concat"))
         goal_dim = int(getattr(dataset, "goal_emb_dim", 0))
+        # pushing_pixels is an image-only dataset: it exposes neither cond_dim
+        # nor in_channels, and cond_dim 0 makes PixelQEstimator a plain
+        # image-and-action energy model.
+        cond_dim = int(getattr(dataset, "cond_dim", 0))
+        in_channels = int(getattr(dataset, "in_channels", dataset.state_shape[0]))
         print(f"  EBM backbone: PIXEL {enc_kind} (pretrained={enc_pretrained}, "
               f"kp={enc_num_kp}, norm={enc_norm_kind}) + DenseResnetValue("
-              f"w={value_width}, blocks={value_blocks}) cond={dataset.cond_dim} "
+              f"w={value_width}, blocks={value_blocks}) cond={cond_dim} "
               f"fusion={cond_fusion}")
         energy_model = PixelQEstimator(
             action_dim=dataset.action_shape,
-            in_channels=dataset.in_channels,
+            in_channels=in_channels,
             encoder_target_height=int(env_cfg.get("encoder_target_height", 128)),
             encoder_target_width=int(env_cfg.get("encoder_target_width", 128)),
             value_width=value_width,
             value_num_blocks=value_blocks,
-            cond_dim=dataset.cond_dim,
+            cond_dim=cond_dim,
             encoder_kind=enc_kind,
             encoder_pretrained=enc_pretrained,
             encoder_num_kp=enc_num_kp,
@@ -441,7 +521,9 @@ def train_ibc(hparams: dict, active_env: str = "particle",
 
     start_time = time.time()
     step = 0
-    log_interval = 500
+    # Honour the shared setting; the old hardcoded 500 meant a short run
+    # printed no progress at all and looked hung.
+    log_interval = int(cfg.get("training_shared", {}).get("log_interval", 500))
 
     last_loss = last_nce = last_gp = last_acc = None
 
@@ -456,8 +538,10 @@ def train_ibc(hparams: dict, active_env: str = "particle",
 
             if is_pixel:
                 # Conv encoder does its own preprocessing; conditioning
-                # (proprio + goal) rides the model's _cond attribute.
-                energy_model._cond = batch["cond"].float().to(device)
+                # (proprio + goal) rides the model's _cond attribute. Gated on
+                # the BATCH, since pushing_pixels is image-only and has none.
+                if "cond" in batch:
+                    energy_model._cond = batch["cond"].float().to(device)
                 states_norm = states
             else:
                 states_norm = obs_normalizer.normalize(states)
@@ -555,7 +639,7 @@ def train_ibc(hparams: dict, active_env: str = "particle",
     total_time = time.time() - start_time
     print(f"  Training completed in {total_time:.1f}s ({total_time / 60:.2f} min)")
 
-    save_dir = Path(save_dir) if save_dir is not None else CHECKPOINTS_BASE / active_env
+    save_dir = Path(save_dir) if save_dir is not None else CHECKPOINTS_BASE / active_env  # checkpoints/ibc/<env>
     save_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = save_dir / "q_estimator.pt"
     torch.save({
@@ -625,7 +709,7 @@ def evaluate_ibc_checkpoint(
     # hparams when it recorded them, else the config's block.
     if langevin_cfg is None:
         ckpt_hparams = ckpt.get("hparams") if isinstance(ckpt, dict) else None
-        langevin_cfg = inference_config(ckpt_hparams or env_cfg.get("hparams", {}))
+        langevin_cfg = inference_config(ckpt_hparams or hparams_from_env_config(env_cfg))
     action_dim = int(env_cfg["action_dim"])
     frame_stack = int(env_cfg.get("frame_stack", 1))
     action_bounds = tuple(env_cfg.get("action_bounds", [0, 1]))
@@ -634,6 +718,60 @@ def evaluate_ibc_checkpoint(
     # Rebuild the PixelQEstimator from the checkpoint's own arch fields and run
     # the render-eval IBC sim (Langevin on encoded features, grouped by task).
     # Returns early — everything below assumes a flat-state QEstimator.
+    if active_env == "pushing_pixels":
+        # Image-only EBM: no conditioning vector, and its own IBC evaluator
+        # (Langevin over the value head on once-encoded features). Returns
+        # early — everything below assumes a flat-state QEstimator.
+        from wifi_bc.models import PixelQEstimator
+        from envs.pushing_pixels_simulation import PushingPixelsIBCSimulation
+
+        ns = norm_stats or {}
+        model = PixelQEstimator(
+            action_dim=action_dim,
+            in_channels=int(ns.get("in_channels", env_cfg["state_dim"][0])),
+            encoder_target_height=int(env_cfg.get("encoder_target_height", 180)),
+            encoder_target_width=int(env_cfg.get("encoder_target_width", 240)),
+            value_width=int(ns.get("value_width", 1024)),
+            value_num_blocks=int(ns.get("value_num_blocks", 1)),
+            cond_dim=0,
+            encoder_kind=str(ns.get("encoder_kind", "conv_maxpool")),
+            encoder_pretrained=False,
+            encoder_num_kp=int(ns.get("encoder_num_kp", 64)),
+            encoder_norm_kind=str(ns.get("encoder_norm_kind", "bn")),
+            encoder_per_camera=bool(ns.get("encoder_per_camera", False)),
+        )
+        model.load_state_dict(sd)
+        model.to(device).eval()
+        if num_seeds is None:
+            num_seeds = int(env_cfg.get("num_eval_seeds", 100))
+        sim = PushingPixelsIBCSimulation(
+            energy_net=model, device=str(device),
+            max_episode_steps=int(env_cfg.get("max_episode_steps", 100)),
+            frame_stack=frame_stack, norm_stats=norm_stats,
+            langevin_cfg=langevin_cfg,
+            goal_dist_tolerance=float(env_cfg.get("goal_dist_tolerance", 0.02)),
+            action_in_model_range=action_in_model_range,
+        )
+        t0 = time.time()
+        succ, rews, eplens, terms = [], [], [], []
+        for seed in range(num_seeds):
+            r = sim.run_episode(seed=seed)
+            succ.append(bool(r.get("success", False)))
+            rews.append(float(r.get("total_reward", 0.0)))
+            eplens.append(int(r.get("episode_length", 0)))
+            terms.append(bool(r.get("terminated", False)))
+        sim.close()
+        return {
+            "success_rate": float(np.mean(succ)),
+            "success_rate_std": float(np.std(succ)),
+            "avg_reward": float(np.mean(rews)),
+            "std_reward": float(np.std(rews)),
+            "median_reward": float(np.median(rews)),
+            "avg_episode_length": float(np.mean(eplens)),
+            "num_seeds": int(num_seeds),
+            "eval_time_s": time.time() - t0,
+        }
+
     if (isinstance(ckpt, dict) and ckpt.get("pixel")) or active_env == "libero_goal_pixels":
         from wifi_bc.models import PixelQEstimator
         from envs.libero_goal_pixels_simulation import LiberoGoalPixelsIBCSimulation
@@ -772,6 +910,23 @@ def evaluate_ibc_checkpoint(
             obs_mean=np.asarray(norm_stats["obs_mean"], dtype=np.float32),
             obs_std=np.asarray(norm_stats["obs_std"], dtype=np.float32),
         )
+    elif active_env == "pushing":
+        max_steps = int(env_cfg.get("max_episode_steps", 100))
+        if norm_stats is None or "obs_mean" not in norm_stats:
+            raise RuntimeError(
+                "pushing DFO eval requires norm_stats with obs_mean/obs_std. "
+                "Train with a fresh checkpoint."
+            )
+        state_dim = int(len(np.asarray(norm_stats["obs_mean"]).reshape(-1)))
+        model = _build_eval_model(state_dim * frame_stack)
+        model.load_state_dict(sd)
+        model.to(device).eval()
+        obs_normalizer = ObservationNormalizer(
+            env_id=env_cfg["env_id"], device=device,
+            frame_stack=frame_stack,
+            obs_mean=np.asarray(norm_stats["obs_mean"], dtype=np.float32),
+            obs_std=np.asarray(norm_stats["obs_std"], dtype=np.float32),
+        )
     else:
         raise ValueError(f"Unsupported active_env for DFO eval: {active_env}")
 
@@ -797,7 +952,7 @@ def evaluate_ibc_checkpoint(
             (norm_stats["act_max"] - norm_stats["act_min"]) == 0, 1.0,
             norm_stats["act_max"] - norm_stats["act_min"],
         )
-        if active_env in _D4RL_REWARD_ENVS:
+        if active_env in _D4RL_REWARD_ENVS or active_env == "pushing":
             scale = rng / (hi - lo)
             return norm_stats["act_min"] + (a - lo) * scale
         return a * rng + norm_stats["act_min"]
@@ -830,6 +985,12 @@ def evaluate_ibc_checkpoint(
         if active_env == "particle":
             from envs.particle_env import ParticleEnv
             return ParticleEnv(n_dim=n_dim, n_steps=max_steps, render_mode=None)
+        if active_env == "pushing":
+            from envs.pushing_env import PushingEnv
+            return PushingEnv(
+                n_steps=max_steps,
+                goal_dist_tolerance=float(env_cfg.get("goal_dist_tolerance", 0.02)),
+            )
         if active_env == "kitchen":
             # Recover the exact FrankaKitchen-v1 the dataset was recorded with
             # (correct tasks_to_complete + obs layout). Avoids reward_type kwarg

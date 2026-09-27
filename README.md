@@ -103,9 +103,9 @@ package, or let uv use its own managed interpreter, which ships the headers:
 
 | Task | Source | Destination |
 |---|---|---|
-| Particle | [particle.zip](https://storage.googleapis.com/brain-reach-public/ibc_data/particle.zip) (~80 MB) | `datasets/particle/` |
-| Pushing (states) | [block_push_states_location.zip](https://storage.googleapis.com/brain-reach-public/ibc_data/block_push_states_location.zip) (~5 MB) | `datasets/block_push/` |
-| Pushing (pixels) | [block_push_visual_location.zip](https://storage.googleapis.com/brain-reach-public/ibc_data/block_push_visual_location.zip) | `datasets/block_push/` |
+| Particle | [particle.zip](https://storage.googleapis.com/brain-reach-public/ibc_data/particle.zip) (~80 MB) | `datasets/` (the zip contains `particle/`) |
+| Pushing (states) | [block_push_states_location.zip](https://storage.googleapis.com/brain-reach-public/ibc_data/block_push_states_location.zip) (~5 MB) | `datasets/block_push/`† |
+| Pushing (pixels) | [block_push_visual_location.zip](https://storage.googleapis.com/brain-reach-public/ibc_data/block_push_visual_location.zip) | `datasets/block_push/`† |
 | Adroit Pen, Franka Kitchen | downloaded automatically by Minari on first use | `~/.minari/` |
 | LIBERO-Goal | fetched by `scripts/setup_libero.sh` | `third_party/LIBERO/libero/datasets/` |
 | Point Maze | generated at training time from a scripted expert | — |
@@ -114,10 +114,22 @@ The Particle and Pushing archives come from the [Implicit BC](https://github.com
 data release. For example:
 
 ```bash
+# Particle — the archive already contains a `particle/` directory, so unzip into datasets/
+mkdir -p datasets && cd datasets
+wget https://storage.googleapis.com/brain-reach-public/ibc_data/particle.zip
+unzip particle.zip && rm particle.zip && cd ..
+# -> datasets/particle/16d_oracle_particle_*.tfrecord
+
+# Pushing — this archive contains `block_push_states_location/`, so unzip into datasets/block_push/
 mkdir -p datasets/block_push && cd datasets/block_push
 wget https://storage.googleapis.com/brain-reach-public/ibc_data/block_push_states_location.zip
 unzip block_push_states_location.zip && rm block_push_states_location.zip && cd ../..
+# -> datasets/block_push/block_push_states_location/
 ```
+
+Each task's expected path is the `data_dir` in its `config/config.json` block; if a run reports
+`No TFRecord files found matching pattern`, compare that pattern against where the archive actually
+unpacked.
 
 ## Using WiFI-BC in your own project
 
@@ -173,21 +185,23 @@ fully described by the method's script plus `--env`, and nothing else needs edit
 
 ```bash
 uv run python -m training.wifi_bc_training --env pushing
-uv run python -m envs.evaluate --checkpoint checkpoints --env pushing
+uv run python -m envs.evaluate --checkpoint checkpoints/wifi_bc/pushing --env pushing
 ```
 
-`envs.evaluate` infers the method from the weight files in the checkpoint directory, so the same
-command scores every method and reports the same metrics.
+Each run writes to `checkpoints/<method>/<env>` unless `training_shared.model_save_dir` says
+otherwise, so methods never overwrite or shadow each other. `envs.evaluate` infers the method from
+the weight files it finds there, so the same command scores every method and reports the same
+metrics — and it refuses, rather than guessing, if one directory holds two methods' weights.
 
 ### One command per method × task
 
 | Task | WiFI-BC | IBC | Diffusion Policy | Consistency Policy | BC (MSE) |
 |---|---|---|---|---|---|
-| Particle 16-D | `--env particle` | `--env particle` | `--env particle` | `--env particle` | `--env particle` |
-| Adroit Pen | `--env pen` | `--env pen` | `--env pen` | `--env pen` | `--env pen` |
-| Franka Kitchen | `--env kitchen` | `--env kitchen` | `--env kitchen` | `--env kitchen` | `--env kitchen` |
-| Pushing (states) | `--env pushing` | — | `--env pushing` | `--env pushing` | `--env pushing` |
-| Pushing (pixels) | `--env pushing_pixels` | — | `--env pushing_pixels` | `--env pushing_pixels` | `--env pushing_pixels` |
+| Particle 16-D | `--env particle` | `--env particle` | `--env particle` | `--env particle` | `--env particle`† |
+| Adroit Pen | `--env pen` | `--env pen` | `--env pen` | `--env pen` | `--env pen`† |
+| Franka Kitchen | `--env kitchen` | `--env kitchen` | `--env kitchen` | `--env kitchen` | `--env kitchen`† |
+| Pushing (states) | `--env pushing` | `--env pushing`† | `--env pushing` | `--env pushing` | `--env pushing`† |
+| Pushing (pixels) | `--env pushing_pixels` | `--env pushing_pixels`† | `--env pushing_pixels` | `--env pushing_pixels` | `--env pushing_pixels`† |
 | LIBERO-Goal | `--env libero_goal_pixels` | `--env libero_goal_pixels` | `--env libero_goal_pixels` | `--env libero_goal_pixels` | `--env libero_goal_pixels` |
 
 with the training scripts
@@ -200,19 +214,57 @@ uv run python -m training.consistency_policy_training  --env <task>
 uv run python -m training.bc_mse_training              --env <task>
 ```
 
-A dash marks a combination this repository does not train. The paper still reports IBC on both
-Pushing variants, because for each baseline it takes the better of that method's officially
-published result and our own reproduction, and for Pushing the published IBC numbers stand; the
-inference cost in the second table was measured on this architecture. `ibc_training` therefore has
-no Pushing data path.
+† **Runs, but reproduces nothing published.** For each baseline the paper takes the better of that
+method's officially reported result and our own reproduction. For these cells the published number
+won, so we never trained them ourselves, and `config/config.json` carries no tuned hyperparameters
+for them — they fall back to each method's paper-faithful defaults. The commands exist so the
+method × task matrix is complete and you can run these combinations if you want them; treat what
+you get as your own run, not as the published figure. This covers IBC on both Pushing variants and
+BC (MSE) on everything except LIBERO-Goal.
 
-Every other cell trains from `config/config.json`'s curated hyperparameters for that method and
-task. The two dashes in the WiFI-BC results row mean something different: Adroit Pen and
+Every other cell trains from `config/config.json`'s curated hyperparameters for that exact method
+and task. One practical note: a Consistency Policy run trains an EDM teacher and then distils a
+one-step student from it within the same job (`cp_phase` defaults to `both`), so it costs roughly
+two trainings' worth of compute.
+
+Every method trains from scratch on every task — no pretrained weights anywhere, matching the
+paper's protocol.
+
+The two dashes in the WiFI-BC results row mean something different again: Adroit Pen and
 LIBERO-Goal are reported with argmax only, because refinement did not improve them.
 
 Each task reports on its own protocol: success rate for Particle, both Pushing variants and
 LIBERO-Goal; episode return for Adroit Pen; subtasks completed for Franka Kitchen. `envs.evaluate`
 prints whichever applies, and `--json results.json` writes the full per-seed breakdown.
+
+### Changing hyperparameters
+
+Everything a run uses lives in one file, so there is nothing to edit in the source. Point any
+entry point at your own copy and leave the shipped config pristine:
+
+```bash
+cp config/config.json my_config.json     # then edit it
+uv run python -m training.wifi_bc_training --env pushing --config my_config.json
+uv run python -m envs.evaluate --checkpoint checkpoints/wifi_bc/pushing --env pushing --config my_config.json
+```
+
+`WIFI_BC_CONFIG_PATH=my_config.json` does the same thing and is handy for a sweep that shells out.
+Precedence is `--config`, then `WIFI_BC_CONFIG_PATH`, then `config/config.json`.
+
+Inside a config, values resolve most-specific-first:
+
+```
+environments.<env>.methods.<method>.training.<key>   this method, on this task   (wins)
+environments.<env>.training.<key>                    every method on this task
+training_shared.<key>                                every task
+```
+
+So giving Diffusion Policy a different learning rate on Pushing means editing
+`environments.pushing.methods.diffusion_policy.training.learning_rate`, and nothing else changes.
+The same shape applies to every method, IBC included — `methods.ibc.training.training_steps` is
+read exactly like the others.
+Network shape lives under `model` rather than `training` (`control_points`, `cp_width`, `q_depth`,
+`encoder_kind`, …); the same three-level precedence applies.
 
 ### Which inference variant a run uses
 

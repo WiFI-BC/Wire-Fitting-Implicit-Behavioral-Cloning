@@ -12,6 +12,16 @@ from torch.utils.data import Dataset
 import minari
 
 try:
+    # Import torch's lazy `_dynamo` submodule BEFORE TensorFlow. TF pulls in
+    # jaxlib, and with jaxlib already resident the first import of
+    # torch._dynamo segfaults the process. That import is triggered lazily by
+    # the first `torch.optim.*` construction, so without this line every
+    # training script on a TFRecord task (particle, pushing, pushing_pixels)
+    # dies with SIGSEGV the moment it builds its optimizer — after the dataset
+    # has loaded, which makes it look like a data problem. Importing it here,
+    # ahead of TF, is the whole fix.
+    import torch._dynamo  # noqa: F401
+
     # TF preallocates the whole GPU at first device touch by default, which
     # starves PyTorch. Setting allow-growth before import keeps TF on the GPU
     # for fast tf.data pipeline ops while only reserving what it actually uses
@@ -1248,3 +1258,58 @@ class LiberoGoalPixelsDataset(Dataset):
 
     def __len__(self):
         return len(self._agv)
+
+
+class ReachDataset(Dataset):
+    """Scripted-expert demonstrations for `Reach-v0`.
+
+    Generated on the fly rather than downloaded, so the "bring your own
+    environment" walkthrough in the README needs no data files. The expert
+    drives straight at the goal at full speed, which makes the task unimodal
+    and easy — the point is the plumbing, not the difficulty.
+    """
+
+    def __init__(self, size: int = 20000, frame_stack: int = 1,
+                 goal_radius: float = 0.05, step_size: float = 0.1, seed: int = 0):
+        from envs.reach_env import ACTION_DIM, OBS_DIM
+
+        rng = np.random.default_rng(seed)
+        obs, acts, starts = [], [], []
+        while len(obs) < size:
+            agent = rng.uniform(0, 1, 2).astype(np.float32)
+            goal = rng.uniform(0, 1, 2).astype(np.float32)
+            starts.append(len(obs))
+            for _ in range(50):
+                if len(obs) >= size:
+                    break
+                delta = goal - agent
+                dist = float(np.linalg.norm(delta))
+                if dist < goal_radius:
+                    break
+                # Full-speed unit step toward the goal, clipped to the box.
+                action = np.clip(delta / max(dist, 1e-8), -1.0, 1.0).astype(np.float32)
+                obs.append(np.concatenate([agent, goal]).astype(np.float32))
+                acts.append(action)
+                agent = np.clip(agent + action * step_size, 0.0, 1.0).astype(np.float32)
+
+        self.observations = np.asarray(obs, dtype=np.float32)
+        self.actions = np.asarray(acts, dtype=np.float32)
+        self._episode_starts = np.asarray(starts, dtype=np.int64)
+        if frame_stack > 1:
+            self.observations = stack_frames(self.observations, self._episode_starts, frame_stack)
+
+        self.state_shape = self.observations.shape[1]
+        self.action_shape = ACTION_DIM
+        # The trainers read these to build norm_stats; actions are already in
+        # the model's [-1, 1] box, so the min/max map is the identity.
+        self.act_min = self.actions.min(axis=0).astype(np.float32)
+        self.act_max = self.actions.max(axis=0).astype(np.float32)
+        self.action_norm_range = (-1.0, 1.0)
+        self.obs_mean = self.observations.mean(axis=0)[:OBS_DIM].astype(np.float32)
+        self.obs_std = (self.observations.std(axis=0)[:OBS_DIM] + 1e-6).astype(np.float32)
+
+    def __len__(self) -> int:
+        return len(self.observations)
+
+    def __getitem__(self, index):
+        return {"state": self.observations[index], "action": self.actions[index]}

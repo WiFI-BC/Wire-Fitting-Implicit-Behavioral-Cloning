@@ -7,9 +7,9 @@ environment name.
 
     uv run python -m training.ibc_training --env pen
 
-IBC's hyperparameters live under each environment's `methods.ibc.hparams` block.
-Anything the block does not set falls back to `baselines.ibc.DEFAULT_IBC_HPARAMS`,
-which holds the paper-faithful defaults.
+IBC's hyperparameters live under each environment's `methods.ibc.training` block,
+named the same way as every other method's. Anything the block does not set
+falls back to `baselines.ibc.DEFAULT_IBC_HPARAMS`, the paper-faithful defaults.
 
 Writes `q_estimator.pt` and `hparams.json` to
 `checkpoints/ibc/<env>` unless `--save-dir` says otherwise. Evaluate the result
@@ -27,13 +27,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-def resolve_hparams(defaults: dict, config: dict, active_env: str) -> dict:
-    """Merge the env's `methods.ibc.hparams` block onto the paper-faithful defaults."""
+def resolve_hparams(config: dict, active_env: str) -> dict:
+    """IBC hyperparameters for this environment, merged onto the defaults."""
+    from baselines.ibc import hparams_from_env_config
     from wifi_bc.config import resolve_env_config
 
-    hparams = dict(defaults)
-    hparams.update(resolve_env_config(config, active_env, "ibc").get("hparams", {}))
-    return hparams
+    return hparams_from_env_config(resolve_env_config(config, active_env, "ibc"))
 
 
 def main() -> int:
@@ -56,7 +55,7 @@ def main() -> int:
     # baselines.ibc re-reads the config for the env block, so point it at the
     # same file before importing it.
     os.environ["WIFI_BC_CONFIG_PATH"] = str(config_path)
-    from baselines.ibc import DEFAULT_IBC_HPARAMS, train_ibc
+    from baselines.ibc import train_ibc
 
     with open(config_path) as f:
         config = json.load(f)
@@ -66,7 +65,7 @@ def main() -> int:
         parser.error(f"unknown env {active_env!r}; "
                      f"choose from {sorted(config['environments'])}")
 
-    hparams = resolve_hparams(DEFAULT_IBC_HPARAMS, config, active_env)
+    hparams = resolve_hparams(config, active_env)
     if args.seed is not None:
         hparams["trial_seed"] = args.seed
 

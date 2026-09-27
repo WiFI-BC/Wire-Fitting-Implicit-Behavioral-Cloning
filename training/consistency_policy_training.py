@@ -56,9 +56,10 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from wifi_bc.config import resolve_active_env, resolve_env_config  # noqa: E402
+from wifi_bc.config import (default_checkpoint_dir, resolve_active_env,
+                            resolve_config_path, resolve_env_config)  # noqa: E402
 
-config_path = Path(os.environ.get("WIFI_BC_CONFIG_PATH") or (Path(__file__).resolve().parent.parent / "config" / "config.json"))
+config_path = resolve_config_path()
 with open(config_path) as f:
     config = json.load(f)
 active_env = resolve_active_env(config)
@@ -110,7 +111,9 @@ sched = KarrasSchedule(sigma_min=float(g("cp_sigma_min", 0.02)), sigma_max=float
                        rho=float(g("cp_rho", 7.0)), bins=int(g("cp_bins", 80)), sigma_data=float(g("cp_sigma_data", 0.5)))
 log_interval = int(training_shared.get("log_interval", 1000))
 save_interval = int(training_shared.get("save_interval", 10000))
-MODEL_SAVE_DIR = training_shared.get("model_save_dir", "checkpoints")
+MODEL_SAVE_DIR = training_shared.get(
+    "model_save_dir", default_checkpoint_dir("consistency_policy", active_env)
+)
 num_workers = int(env_config.get("dataloader_num_workers",
                                  training_shared.get("num_workers", 4 if is_pixels else 0)))
 dp = resolve_dp_params(env_config, training_shared)
