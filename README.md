@@ -1,6 +1,6 @@
 # WiFI-BC: Wire-Fitting Implicit Behavioral Cloning
 
-Reference implementation for the ICRA submission *Wire-Fitting Implicit Behavioral Cloning*.
+![Wire-Fitting Implicit Behavioral Cloning](assets/maindiagram.png)
 
 ## Abstract
 
