@@ -2,26 +2,24 @@
 
 Reference implementation for the ICRA submission *Wire-Fitting Implicit Behavioral Cloning*.
 
-Imitation learning forces a choice between task success and inference speed. Explicit policies
-are fast but struggle with discontinuous or multimodal action distributions; implicit and
-diffusion-based policies model them well but pay for it with an iterative optimization at every
-step.
+## Abstract
 
-**WiFI-BC** removes the iteration. A *generator* proposes a small set of `N` candidate actions for
-the current state, and a *Q-estimator* scores them; the action is the highest-scoring candidate.
-Inference is therefore one forward pass through the generator plus `N` parallel evaluations —
-no gradient ascent, no denoising chain.
-
-What makes the candidates worth scoring is how they are trained. Borrowing the *structural
-maximizability* of wire-fitting interpolation, the training objective biases one candidate toward
-the maximum of the score function, so the generator's proposal set is expected to contain the
-argmax rather than merely sample near it. The Q-estimator is trained but not architecturally
-constrained to peak at the control points, which leaves an escape hatch: when a task needs more
-precision than the generator alone provides, the same critic can be used as an energy function and
-refined at inference time (DFO or Langevin MCMC), at a cost you choose.
-
-Across seven task settings — synthetic control, simulated manipulation from states and from
-pixels, and a real WidowX arm — WiFI-BC is never beaten on success *and* speed at the same time.
+Imitation learning algorithms face the dilemma of choosing between task success and inference-time
+efficiency. Explicit methods provide the fastest inference but often fail to model complex,
+discontinuous, or multimodal action distributions. On the other hand, implicit and diffusion-based
+methods improve their success by iteratively refining their actions, which sacrifices efficiency.
+Whereas some methods aim to distill diffusion policies while increasing inference speed, they
+either suffer from significant performance decreases or their speed increase is limited. In this
+paper, we introduce Wire-Fitting Implicit Behavioral Cloning (WiFI-BC), a novel implicit imitation
+learning method that learns a generator to output a small set of $N$ candidate actions and a
+state-action score function to evaluate them. Inspired by the structural maximization property of
+wire-fitting interpolation, our algorithm biases one of the candidate actions toward maximizing the
+score function. Consequently, the inference optimization step consists of just one forward
+generation and $N$ parallelizable evaluations rather than an iterative process, providing high
+success rates while maintaining high inference speed. We evaluate WiFI-BC on seven tasks in
+synthetic, simulated, and real-world environments, demonstrating equivalent task success to
+state-of-the-art methods with a significant reduction in per-step inference time. Code, videos, and
+more details are available at [wifi-bc.github.io](https://wifi-bc.github.io/).
 
 ## Contents
 
@@ -35,47 +33,20 @@ pixels, and a real WidowX arm — WiFI-BC is never beaten on success *and* speed
 
 ## Results
 
-Mean ± standard deviation across three training seeds, 100 evaluation episodes each. Inference
-cost is the per-step wall-clock time on a single NVIDIA GeForce RTX 5070 Laptop GPU, at a receding
-horizon of one step. **Bold** marks the best score per task.
+![Task success against per-step inference cost](assets/results_tradeoff.png)
 
-| Method | Particle 16-D<br>Success % | Adroit Pen<br>Return | Franka Kitchen<br>Subtasks (0–4) | Pushing states<br>Success % | Pushing pixels<br>Success % | LIBERO-Goal<br>Success % |
-|---|---|---|---|---|---|---|
-| BC (MSE) | 3.0 ± 12.6 | 2141 ± 109 | 1.76 ± 0.07 | 98.3 ± 0.5 | 87.0 ± 4.1 | **94.1 ± 1.9** |
-| BC (MDN) | — | — | — | **100 ± 0** | 10.0 ± 4.3 | — |
-| IBC | **99.0 ± 4.3** | 2586 ± 65 | 3.37 ± 0.01 | **100 ± 0** | **100 ± 0** | 42.0 ± 8.7 |
-| DDPM-100 | 67.0 ± 7.2 | 3050 ± 111 | 2.45 ± 0.41 | 99.3 ± 0.6 | 94.0 ± 2.2 | 84.5 ± 3.4 |
-| DDIM (5–25 steps) | 71.0 ± 7.1 | **3077 ± 67** | 2.60 ± 0.51 | 99.0 ± 1.7 | 92.7 ± 1.7 | 81.2 ± 4.1 |
-| Consistency Policy (1-step) | 0.0 ± 0.0 | 2287 ± 143 | 1.12 ± 0.88 | 4.5 ± 3.5 | 75.0 ± 11.3 | 91.1 ± 1.4 |
-| **WiFI-BC (argmax)** | 82.7 ± 3.1 | 2631 ± 110 | 2.28 ± 0.35 | 99.0 ± 1.0 | 94.0 ± 3.0 | 93.9 ± 0.7 |
-| **WiFI-BC (+ refinement)** | 84.2 ± 7.2 | — | **3.41 ± 0.19** | **100 ± 0** | 95.7 ± 1.7 | — |
+Success (or the task's own metric) against per-step inference time, one panel per task. Up and to
+the left is better, and the grey step line marks the Pareto frontier. Mean and standard deviation
+are taken across three training seeds, 100 evaluation episodes each, timed on a single NVIDIA
+GeForce RTX 5070 Laptop GPU at a receding horizon of one step.
 
-Per-step inference cost (ms), same runs:
+WiFI-BC reaches the Pareto frontier on every task, the only exception being the tasks where
+regression BC attains the best success rate outright. In the real-world Push-T experiments on a
+WidowX arm, WiFI-BC obtains both the best IoU and the best inference speed.
 
-| Method | Particle 16-D | Adroit Pen | Franka Kitchen | Pushing states | Pushing pixels | LIBERO-Goal |
-|---|---|---|---|---|---|---|
-| BC (MSE) | **0.11** | **0.70** | **0.69** | **0.48** | **0.87** | **5.39** |
-| IBC | 476.45 | 195.87 | 432.95 | 5.12 | 16.06 | 111.05 |
-| DDPM-100 | 41.95 | 58.39 | 67.34 | 57.92 | 43.01 | 58.77 |
-| DDIM (5–25 steps) | 6.45 | 4.32 | 4.49 | 4.17 | 3.69 | 14.92 |
-| Consistency Policy (1-step) | 0.90 | 1.13 | 1.20 | 1.12 | 1.57 | 5.81 |
-| **WiFI-BC (argmax)** | 0.38 | 1.55 | 1.67 | 0.79 | 1.46 | 10.61 |
-| **WiFI-BC (+ refinement)** | 204.24 | — | 172.67 | 3.40 | 5.87 | — |
-
-Reading the two tables together is the point. Excluding regression BC — which is fast but fails
-outright on the multimodal tasks (3% on Particle 16-D, 10% for the MDN variant on Pushing pixels) —
-WiFI-BC's argmax path is the fastest or near-fastest method everywhere while staying within a few
-points of the best score. Where refinement is needed it stays competitive: on Franka Kitchen it
-takes the best result at 2.5× IBC's speed, and on Pushing states it matches IBC's perfect score.
-
-Two further results in the paper are not reproducible from this repository:
-
-- **Push-T (real WidowX arm).** WiFI-BC reaches 79.9% IoU with argmax and 83.6% with DFO
-  refinement, against 73.4% for IBC and 61.0% for BC. Running it needs the physical rig, so the
-  robot code is not included here.
-- **Point Maze multimodality.** `point_maze_pillar` ships as a configured environment (an obstacle
-  sits between the start and the goal, and the scripted expert takes either corridor arbitrarily).
-  It backs a qualitative figure rather than a number in the tables.
+`point_maze_pillar` ships as a configured environment but backs a qualitative multimodality figure
+rather than a number in this plot. The real-robot Push-T result needs the physical rig, so that
+code is not included here.
 
 ## Installation
 
@@ -95,7 +66,7 @@ bash scripts/setup_libero.sh # LIBERO-Goal (clones LIBERO, fetches demos and goa
 ```
 
 The Pushing extras are separate because `pybullet==3.1.6` publishes no wheels for Python 3.12+ and
-has to be built from source, which needs `Python.h` — install your distribution's `python3-dev`
+has to be built from source, which needs `Python.h`. Install your distribution's `python3-dev`
 package, or let uv use its own managed interpreter, which ships the headers:
 `uv run --managed-python ...`.
 
@@ -108,19 +79,19 @@ package, or let uv use its own managed interpreter, which ships the headers:
 | Pushing (pixels) | [block_push_visual_location.zip](https://storage.googleapis.com/brain-reach-public/ibc_data/block_push_visual_location.zip) | `datasets/block_push/`† |
 | Adroit Pen, Franka Kitchen | downloaded automatically by Minari on first use | `~/.minari/` |
 | LIBERO-Goal | fetched by `scripts/setup_libero.sh` | `third_party/LIBERO/libero/datasets/` |
-| Point Maze | generated at training time from a scripted expert | — |
+| Point Maze | generated at training time from a scripted expert | none |
 
 The Particle and Pushing archives come from the [Implicit BC](https://github.com/google-research/ibc)
 data release. For example:
 
 ```bash
-# Particle — the archive already contains a `particle/` directory, so unzip into datasets/
+# Particle: the archive already contains a `particle/` directory, so unzip into datasets/
 mkdir -p datasets && cd datasets
 wget https://storage.googleapis.com/brain-reach-public/ibc_data/particle.zip
 unzip particle.zip && rm particle.zip && cd ..
 # -> datasets/particle/16d_oracle_particle_*.tfrecord
 
-# Pushing — this archive contains `block_push_states_location/`, so unzip into datasets/block_push/
+# Pushing: this archive contains `block_push_states_location/`, so unzip into datasets/block_push/
 mkdir -p datasets/block_push && cd datasets/block_push
 wget https://storage.googleapis.com/brain-reach-public/ibc_data/block_push_states_location.zip
 unzip block_push_states_location.zip && rm block_push_states_location.zip && cd ../..
@@ -168,10 +139,18 @@ policy = WiFIBC.from_checkpoint(
 Pick the inference variant with `inference_mode`:
 
 ```python
-WiFIBC.from_checkpoint(path, inference_mode="argmax")    # default — one forward pass, fastest
-WiFIBC.from_checkpoint(path, inference_mode="dfo")       # derivative-free refinement of the cloud
-WiFIBC.from_checkpoint(path, inference_mode="langevin")  # Langevin MCMC on the critic's energy
+# default: one forward pass plus N parallel evaluations, the fastest path
+WiFIBC.from_checkpoint(path, inference_mode="argmax")
+
+# derivative-free refinement of the candidate cloud, over 5 iterations
+WiFIBC.from_checkpoint(path, inference_mode="dfo", dfo_iterations=5)
+
+# Langevin MCMC on the critic's energy surface, over 25 iterations
+WiFIBC.from_checkpoint(path, inference_mode="langevin", langevin_iterations=25)
 ```
+
+Both refinement modes take their iteration count explicitly, since that is what trades inference
+speed against precision. Omit it and the value from the task's config block is used.
 
 Frame stacking, observation normalization and the mapping back to the environment's action units
 are all handled inside `act`, so pass the raw per-step observation and call `reset()` between
@@ -180,8 +159,8 @@ episodes.
 ## Reproducing the experiments
 
 Every hyperparameter lives in `config/config.json`, which ships with the best-found configuration
-for each method on each task — the numbers in the tables above come from these settings. A run is
-fully described by the method's script plus `--env`, and nothing else needs editing:
+for each method on each task, which is what produced the reported results. A run is fully
+described by the method's script plus `--env`, and nothing else needs editing:
 
 ```bash
 uv run python -m training.wifi_bc_training --env pushing
@@ -191,7 +170,7 @@ uv run python -m envs.evaluate --checkpoint checkpoints/wifi_bc/pushing --env pu
 Each run writes to `checkpoints/<method>/<env>` unless `training_shared.model_save_dir` says
 otherwise, so methods never overwrite or shadow each other. `envs.evaluate` infers the method from
 the weight files it finds there, so the same command scores every method and reports the same
-metrics — and it refuses, rather than guessing, if one directory holds two methods' weights.
+metrics. It refuses, rather than guessing, if one directory holds two methods' weights.
 
 ### One command per method × task
 
@@ -214,33 +193,15 @@ uv run python -m training.consistency_policy_training  --env <task>
 uv run python -m training.bc_mse_training              --env <task>
 ```
 
-† **Runs, but reproduces nothing published.** For each baseline the paper takes the better of that
-method's officially reported result and our own reproduction. For these cells the published number
-won, so we never trained them ourselves, and `config/config.json` carries no tuned hyperparameters
-for them — they fall back to each method's paper-faithful defaults. The commands exist so the
-method × task matrix is complete and you can run these combinations if you want them; treat what
-you get as your own run, not as the published figure. This covers IBC on both Pushing variants and
-BC (MSE) on everything except LIBERO-Goal.
+† These combinations keep the officially reported hyperparameters for that method.
 
-Every other cell trains from `config/config.json`'s curated hyperparameters for that exact method
-and task. One practical note: a Consistency Policy run trains an EDM teacher and then distils a
-one-step student from it within the same job (`cp_phase` defaults to `both`), so it costs roughly
-two trainings' worth of compute.
-
-Every method trains from scratch on every task — no pretrained weights anywhere, matching the
+Every method trains from scratch on every task, with no pretrained weights anywhere, matching the
 paper's protocol.
-
-The two dashes in the WiFI-BC results row mean something different again: Adroit Pen and
-LIBERO-Goal are reported with argmax only, because refinement did not improve them.
-
-Each task reports on its own protocol: success rate for Particle, both Pushing variants and
-LIBERO-Goal; episode return for Adroit Pen; subtasks completed for Franka Kitchen. `envs.evaluate`
-prints whichever applies, and `--json results.json` writes the full per-seed breakdown.
 
 ### Changing hyperparameters
 
 Everything a run uses lives in one file, so there is nothing to edit in the source. Point any
-entry point at your own copy and leave the shipped config pristine:
+entry point at your own config copy:
 
 ```bash
 cp config/config.json my_config.json     # then edit it
@@ -259,19 +220,12 @@ environments.<env>.training.<key>                    every method on this task
 training_shared.<key>                                every task
 ```
 
-So giving Diffusion Policy a different learning rate on Pushing means editing
-`environments.pushing.methods.diffusion_policy.training.learning_rate`, and nothing else changes.
-The same shape applies to every method, IBC included — `methods.ibc.training.training_steps` is
-read exactly like the others.
-Network shape lives under `model` rather than `training` (`control_points`, `cp_width`, `q_depth`,
-`encoder_kind`, …); the same three-level precedence applies.
-
 ### Which inference variant a run uses
 
 The `inference_*` keys in a task's `training` block select the variant, so the shipped config
 already reproduces the row reported for that task. `inference_langevin_iterations: 0` and
 `inference_dfo_iterations: 0` together mean plain argmax. Override them to trade speed against
-precision — the Franka Kitchen block is the clearest example of refinement paying for itself.
+precision. The Franka Kitchen block is the clearest example of refinement paying for itself.
 
 ### Notes
 
@@ -289,7 +243,7 @@ wifi_bc/          the algorithm
   loss.py           InfoNCE, MSE-to-expert, separation and entropy-KDE objectives
   normalizations.py observation normalization and wire-fitting Q-value normalization
   sampling.py       uniform and Langevin MCMC action samplers
-  policy.py         WiFIBC — the plug-and-play policy wrapper
+  policy.py         WiFIBC, the plug-and-play policy wrapper
   config.py         config loading and per-method resolution
 
 baselines/        the methods WiFI-BC is compared against
